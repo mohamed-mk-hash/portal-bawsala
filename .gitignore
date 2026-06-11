@@ -1,0 +1,10 @@
+# Env files
+.env
+.env.local
+.env.*
+!.env.example
+
+# Firebase / Google secrets
+serviceAccountKey.json
+*.serviceAccountKey.json
+mailer-server/serviceAccountKey.json
