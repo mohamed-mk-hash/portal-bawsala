@@ -11,12 +11,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import {
-  Banknote,
-  Bell,
-  CalendarDays,
   Eye,
-  FileText,
-  Mail,
   Plus,
   ReceiptText,
   Search,
@@ -565,9 +560,6 @@ export const Invoices: React.FC = () => {
   const totalInvoices = invoices.length;
   const pendingInvoices = invoices.filter(
     (invoice) => invoice.status === "pending",
-  ).length;
-  const paidInvoices = invoices.filter(
-    (invoice) => invoice.status === "paid",
   ).length;
   const overdueInvoices = invoices.filter(
     (invoice) => invoice.status === "overdue",
