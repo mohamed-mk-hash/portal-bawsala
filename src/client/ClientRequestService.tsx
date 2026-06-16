@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import {
   BadgeCheck,
@@ -14,12 +14,21 @@ import { db } from '../firebase';
 import { useAuth } from '../auth/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 
+type CurrencyCode = 'USD' | 'EUR' | 'CNY' | 'DZD' | 'SAR' | 'TRY';
+
+type BillingPeriod = 'once' | 'monthly' | 'campaign';
+
 type Plan = {
   id: string;
   nameAr: string;
   nameEn: string;
   priceAr: string;
   priceEn: string;
+  basePriceDzd?: number;
+  minPriceDzd?: number;
+  maxPriceDzd?: number;
+  billingPeriod?: BillingPeriod;
+  isCustomPricing?: boolean;
   descriptionAr: string;
   descriptionEn: string;
   featuresAr: string[];
@@ -36,6 +45,131 @@ type ClientService = {
   descriptionEn: string;
   icon: React.ElementType;
   plans: Plan[];
+};
+
+const BASE_CURRENCY: CurrencyCode = 'DZD';
+const EXCHANGE_API_URL = `https://open.er-api.com/v6/latest/${BASE_CURRENCY}`;
+
+const currencies: {
+  value: CurrencyCode;
+  ar: string;
+  en: string;
+}[] = [
+  { value: 'USD', ar: 'دولار أمريكي', en: 'US Dollar' },
+  { value: 'EUR', ar: 'أورو', en: 'Euro' },
+  { value: 'CNY', ar: 'يوان صيني', en: 'Chinese Yuan' },
+  { value: 'DZD', ar: 'دينار جزائري', en: 'Algerian Dinar' },
+  { value: 'SAR', ar: 'ريال سعودي', en: 'Saudi Riyal' },
+  { value: 'TRY', ar: 'ليرة تركية', en: 'Turkish Lira' },
+];
+
+const currencyDecimals: Record<CurrencyCode, number> = {
+  DZD: 0,
+  USD: 2,
+  EUR: 2,
+  CNY: 2,
+  SAR: 2,
+  TRY: 2,
+};
+
+const getCurrencyRate = (
+  currency: CurrencyCode,
+  rates: Record<string, number>
+) => {
+  if (currency === BASE_CURRENCY) return 1;
+  return rates[currency] || 0;
+};
+
+const formatMoney = (
+  amount: number,
+  currency: CurrencyCode,
+  isArabic: boolean
+) => {
+  return `${Number(amount || 0).toLocaleString(isArabic ? 'ar-DZ' : 'en-US', {
+    minimumFractionDigits: currency === 'DZD' ? 0 : 2,
+    maximumFractionDigits: currencyDecimals[currency],
+  })} ${currency}`;
+};
+
+const getBillingSuffix = (
+  billingPeriod: BillingPeriod | undefined,
+  isArabic: boolean
+) => {
+  if (billingPeriod === 'monthly') {
+    return isArabic ? ' / شهرياً' : ' / month';
+  }
+
+  if (billingPeriod === 'campaign') {
+    return isArabic ? ' / حملة' : ' / campaign';
+  }
+
+  return '';
+};
+
+const getConvertedPlanPrice = ({
+  plan,
+  currency,
+  rates,
+  isArabic,
+  ratesLoading,
+}: {
+  plan: Plan;
+  currency: CurrencyCode;
+  rates: Record<string, number>;
+  isArabic: boolean;
+  ratesLoading: boolean;
+}) => {
+  if (plan.isCustomPricing) {
+    return isArabic ? 'تسعير حسب الطلب' : 'Custom pricing';
+  }
+
+  const rate = getCurrencyRate(currency, rates);
+
+  if (!rate) {
+    return ratesLoading
+      ? isArabic
+        ? 'جاري تحويل السعر...'
+        : 'Converting price...'
+      : isArabic
+      ? 'تعذر تحويل السعر'
+      : 'Could not convert price';
+  }
+
+  const suffix = getBillingSuffix(plan.billingPeriod, isArabic);
+
+  if (
+    typeof plan.minPriceDzd === 'number' &&
+    typeof plan.maxPriceDzd === 'number'
+  ) {
+    const min = plan.minPriceDzd * rate;
+    const max = plan.maxPriceDzd * rate;
+
+    return isArabic
+      ? `من ${formatMoney(min, currency, isArabic)} إلى ${formatMoney(
+          max,
+          currency,
+          isArabic
+        )}${suffix}`
+      : `From ${formatMoney(min, currency, isArabic)} to ${formatMoney(
+          max,
+          currency,
+          isArabic
+        )}${suffix}`;
+  }
+
+  if (typeof plan.basePriceDzd === 'number') {
+    const convertedPrice = plan.basePriceDzd * rate;
+
+    return isArabic
+      ? `ابتداءً من ${formatMoney(convertedPrice, currency, isArabic)}${suffix}`
+      : `Starting from ${formatMoney(
+          convertedPrice,
+          currency,
+          isArabic
+        )}${suffix}`;
+  }
+
+  return isArabic ? plan.priceAr : plan.priceEn;
 };
 
 const services: ClientService[] = [
@@ -57,8 +191,11 @@ const services: ClientService[] = [
         nameEn: 'Basic',
         priceAr: 'ابتداءً من 70,000 دج',
         priceEn: 'Starting from 70,000 DZD',
+        basePriceDzd: 70000,
+        billingPeriod: 'once',
         descriptionAr: 'مناسب للمؤسسات التي تحتاج إلى مراجعة مبسطة ودعم أساسي.',
-        descriptionEn: 'Suitable for companies that need a simple review and basic support.',
+        descriptionEn:
+          'Suitable for companies that need a simple review and basic support.',
         featuresAr: [
           'تشخيص إداري أولي',
           'مراجعة أساسية لسير العمل',
@@ -80,6 +217,7 @@ const services: ClientService[] = [
         nameEn: 'Professional',
         priceAr: 'تسعير حسب الطلب',
         priceEn: 'Custom pricing',
+        isCustomPricing: true,
         descriptionAr:
           'مناسب للمؤسسات التي تحتاج إلى خطة تطوير إداري أكثر شمولاً وفعالية.',
         descriptionEn:
@@ -121,8 +259,11 @@ const services: ClientService[] = [
         nameEn: 'Starter Social Media Package',
         priceAr: 'ابتداءً من 25,000 دج / شهرياً',
         priceEn: 'Starting from 25,000 DZD / month',
+        basePriceDzd: 25000,
+        billingPeriod: 'monthly',
         descriptionAr: 'مناسبة للمؤسسات الصغيرة التي تحتاج إلى حضور أساسي ومنظم.',
-        descriptionEn: 'Suitable for small companies that need a simple and organized presence.',
+        descriptionEn:
+          'Suitable for small companies that need a simple and organized presence.',
         featuresAr: [
           'منصة واحدة',
           '8 منشورات شهرياً',
@@ -148,8 +289,12 @@ const services: ClientService[] = [
         nameEn: 'Social Media Growth Package',
         priceAr: 'من 50,000 إلى 80,000 دج / شهرياً',
         priceEn: 'From 50,000 to 80,000 DZD / month',
+        minPriceDzd: 50000,
+        maxPriceDzd: 80000,
+        billingPeriod: 'monthly',
         descriptionAr: 'مناسبة للمؤسسات التي تحتاج إلى محتوى منظم وجودة بصرية أفضل.',
-        descriptionEn: 'Suitable for companies that need organized content and better visual quality.',
+        descriptionEn:
+          'Suitable for companies that need organized content and better visual quality.',
         featuresAr: [
           'حتى منصتين للتواصل الاجتماعي',
           'من 12 إلى 16 منشوراً شهرياً',
@@ -177,8 +322,12 @@ const services: ClientService[] = [
         nameEn: 'Professional Social Media Package',
         priceAr: 'ابتداءً من 100,000 دج / شهرياً',
         priceEn: 'Starting from 100,000 DZD / month',
-        descriptionAr: 'مناسبة للعلامات التي تحتاج إلى إنتاج محتوى أقوى وإدارة منتظمة.',
-        descriptionEn: 'Suitable for brands that need stronger content and regular management.',
+        basePriceDzd: 100000,
+        billingPeriod: 'monthly',
+        descriptionAr:
+          'مناسبة للعلامات التي تحتاج إلى إنتاج محتوى أقوى وإدارة منتظمة.',
+        descriptionEn:
+          'Suitable for brands that need stronger content and regular management.',
         featuresAr: [
           'من 2 إلى 3 منصات تواصل اجتماعي',
           'من 18 إلى 24 منشوراً شهرياً',
@@ -208,8 +357,11 @@ const services: ClientService[] = [
         nameEn: 'Campaign Launch Package',
         priceAr: 'ابتداءً من 60,000 دج / حملة',
         priceEn: 'Starting from 60,000 DZD / campaign',
+        basePriceDzd: 60000,
+        billingPeriod: 'campaign',
         descriptionAr: 'مناسبة لإطلاق عرض أو منتج أو خدمة أو حملة موسمية.',
-        descriptionEn: 'Suitable for launching an offer, product, service, or seasonal campaign.',
+        descriptionEn:
+          'Suitable for launching an offer, product, service, or seasonal campaign.',
         featuresAr: [
           'فكرة الحملة',
           'خطة محتوى الحملة',
@@ -249,8 +401,11 @@ const services: ClientService[] = [
         nameEn: 'Simple Business Website',
         priceAr: 'ابتداءً من 70,000 دج',
         priceEn: 'Starting from 70,000 DZD',
+        basePriceDzd: 70000,
+        billingPeriod: 'once',
         descriptionAr: 'مناسب لموقع تعريفي بسيط بنطاق واضح وعدد صفحات محدود.',
-        descriptionEn: 'Suitable for a simple business website with a clear scope and limited pages.',
+        descriptionEn:
+          'Suitable for a simple business website with a clear scope and limited pages.',
         featuresAr: [
           'من 1 إلى 3 صفحات',
           'تصميم متجاوب',
@@ -274,8 +429,12 @@ const services: ClientService[] = [
         nameEn: 'Professional Business Website',
         priceAr: 'من 140,000 إلى 180,000 دج',
         priceEn: 'From 140,000 to 180,000 DZD',
+        minPriceDzd: 140000,
+        maxPriceDzd: 180000,
+        billingPeriod: 'once',
         descriptionAr: 'مناسب لموقع أعمال احترافي بعدة صفحات وهيكلة أفضل.',
-        descriptionEn: 'Suitable for a professional business website with more pages and better structure.',
+        descriptionEn:
+          'Suitable for a professional business website with more pages and better structure.',
         featuresAr: [
           'من 4 إلى 8 صفحات',
           'تصميم متجاوب مخصص جزئياً',
@@ -303,6 +462,8 @@ const services: ClientService[] = [
         nameEn: 'Advanced Website or Platform',
         priceAr: 'ابتداءً من 300,000 دج',
         priceEn: 'Starting from 300,000 DZD',
+        basePriceDzd: 300000,
+        billingPeriod: 'once',
         descriptionAr:
           'مناسب للمواقع أو المنصات المتقدمة التي تحتاج إلى حسابات ولوحات تحكم وتكاملات.',
         descriptionEn:
@@ -334,8 +495,12 @@ const services: ClientService[] = [
         nameEn: 'Monthly Website Management',
         priceAr: 'ابتداءً من 15,000 دج / شهرياً',
         priceEn: 'Starting from 15,000 DZD / month',
-        descriptionAr: 'مناسبة للمؤسسات التي تحتاج إلى تحديثات مستمرة بعد إطلاق الموقع.',
-        descriptionEn: 'Suitable for companies that need continuous updates after launch.',
+        basePriceDzd: 15000,
+        billingPeriod: 'monthly',
+        descriptionAr:
+          'مناسبة للمؤسسات التي تحتاج إلى تحديثات مستمرة بعد إطلاق الموقع.',
+        descriptionEn:
+          'Suitable for companies that need continuous updates after launch.',
         featuresAr: [
           'تحديثات المحتوى',
           'إصلاحات تقنية بسيطة',
@@ -363,9 +528,97 @@ export const ClientRequestService: React.FC = () => {
 
   const [selectedServiceId, setSelectedServiceId] = useState(services[0].id);
   const [selectedPlanId, setSelectedPlanId] = useState(services[0].plans[0].id);
+  const [selectedCurrency, setSelectedCurrency] =
+    useState<CurrencyCode>('DZD');
+
+  const [rates, setRates] = useState<Record<string, number>>({ DZD: 1 });
+  const [ratesLoading, setRatesLoading] = useState(false);
+  const [ratesError, setRatesError] = useState('');
+  const [ratesLastUpdated, setRatesLastUpdated] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const feedbackRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const controller = new AbortController();
+
+    const loadExchangeRates = async () => {
+      try {
+        setRatesLoading(true);
+        setRatesError('');
+
+        const response = await fetch(EXCHANGE_API_URL, {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load exchange rates.');
+        }
+
+        const data = await response.json();
+
+        if (data.result !== 'success' || !data.rates) {
+          throw new Error('Invalid exchange rate response.');
+        }
+
+        const supportedRates: Record<string, number> = {
+          DZD: 1,
+        };
+
+        currencies.forEach((currency) => {
+          const value = currency.value;
+
+          if (value === BASE_CURRENCY) {
+            supportedRates[value] = 1;
+          } else if (typeof data.rates[value] === 'number') {
+            supportedRates[value] = data.rates[value];
+          }
+        });
+
+        if (isMounted) {
+          setRates(supportedRates);
+          setRatesLastUpdated(data.time_last_update_utc || '');
+        }
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
+
+        console.error(error);
+
+        if (isMounted) {
+          setRatesError(
+            isArabic
+              ? 'تعذر تحميل أسعار الصرف حالياً. يمكنك استعمال الدينار الجزائري أو المحاولة لاحقاً.'
+              : 'Could not load exchange rates right now. You can use DZD or try again later.'
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setRatesLoading(false);
+        }
+      }
+    };
+
+    loadExchangeRates();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [isArabic]);
+
+ useEffect(() => {
+  if (!successMessage && !errorMessage) return;
+
+  window.setTimeout(() => {
+    feedbackRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+  }, 100);
+}, [successMessage, errorMessage]);
 
   const selectedService =
     services.find((service) => service.id === selectedServiceId) || services[0];
@@ -373,6 +626,28 @@ export const ClientRequestService: React.FC = () => {
   const selectedPlan =
     selectedService.plans.find((plan) => plan.id === selectedPlanId) ||
     selectedService.plans[0];
+
+  const selectedCurrencyRate = getCurrencyRate(selectedCurrency, rates);
+
+  const selectedPlanPrice = getConvertedPlanPrice({
+    plan: selectedPlan,
+    currency: selectedCurrency,
+    rates,
+    isArabic,
+    ratesLoading,
+  });
+
+  const canUseSelectedCurrency =
+    selectedCurrency === BASE_CURRENCY ||
+    selectedPlan.isCustomPricing ||
+    Boolean(selectedCurrencyRate);
+
+  const requestDisabled =
+    loading ||
+    !canUseSelectedCurrency ||
+    (ratesLoading &&
+      selectedCurrency !== BASE_CURRENCY &&
+      !selectedPlan.isCustomPricing);
 
   const handleSelectService = (service: ClientService) => {
     setSelectedServiceId(service.id);
@@ -396,22 +671,62 @@ export const ClientRequestService: React.FC = () => {
         return;
       }
 
+      if (!canUseSelectedCurrency) {
+        setErrorMessage(
+          isArabic
+            ? 'تعذر تحويل السعر للعملة المختارة. اختر الدينار الجزائري أو حاول لاحقاً.'
+            : 'Could not convert the price to the selected currency. Choose DZD or try again later.'
+        );
+        return;
+      }
+
+      const planPriceAr = getConvertedPlanPrice({
+        plan: selectedPlan,
+        currency: selectedCurrency,
+        rates,
+        isArabic: true,
+        ratesLoading: false,
+      });
+
+      const planPriceEn = getConvertedPlanPrice({
+        plan: selectedPlan,
+        currency: selectedCurrency,
+        rates,
+        isArabic: false,
+        ratesLoading: false,
+      });
+
       await addDoc(collection(db, 'serviceRequests'), {
         clientId: user.uid,
         clientName: profile.fullName,
         clientEmail: profile.email,
         companyName: profile.companyName || '',
+
         serviceId: selectedService.id,
         serviceName: isArabic ? selectedService.nameAr : selectedService.nameEn,
         serviceNameAr: selectedService.nameAr,
         serviceNameEn: selectedService.nameEn,
+
         planId: selectedPlan.id,
         planName: isArabic ? selectedPlan.nameAr : selectedPlan.nameEn,
         planNameAr: selectedPlan.nameAr,
         planNameEn: selectedPlan.nameEn,
-        planPrice: isArabic ? selectedPlan.priceAr : selectedPlan.priceEn,
-        planPriceAr: selectedPlan.priceAr,
-        planPriceEn: selectedPlan.priceEn,
+
+        planPrice: isArabic ? planPriceAr : planPriceEn,
+        planPriceAr,
+        planPriceEn,
+
+        planCurrency: selectedCurrency,
+        planBaseCurrency: BASE_CURRENCY,
+        currencyRateFromDzd: selectedCurrencyRate || 1,
+        currencyRateUpdatedAt: ratesLastUpdated || '',
+
+        planBasePriceDzd: selectedPlan.basePriceDzd ?? null,
+        planBaseMinPriceDzd: selectedPlan.minPriceDzd ?? null,
+        planBaseMaxPriceDzd: selectedPlan.maxPriceDzd ?? null,
+        planBillingPeriod: selectedPlan.billingPeriod || 'once',
+        isCustomPricing: Boolean(selectedPlan.isCustomPricing),
+
         status: 'pending',
         createdAt: serverTimestamp(),
       });
@@ -444,13 +759,18 @@ export const ClientRequestService: React.FC = () => {
         </h1>
         <p className="mt-2 text-gray-500">
           {isArabic
-            ? 'اختر الخدمة المناسبة، ثم اختر الباقة التي تريدها. سيتم إرسال الطلب للإدارة للمراجعة.'
-            : 'Choose a service, then select the plan you want. Your request will be sent to the admin for review.'}
+            ? 'اختر الخدمة المناسبة، ثم اختر الباقة التي تريدها. يمكنك أيضاً تغيير عملة عرض الأسعار حسب بلدك.'
+            : 'Choose a service, then select the plan you want. You can also change the displayed currency based on your country.'}
         </p>
       </div>
 
+      
+
       {successMessage && (
-        <div className="rounded-2xl border border-green-200 bg-green-50 px-5 py-4 text-green-700 font-medium">
+  <div
+    ref={feedbackRef}
+    className="rounded-2xl border border-green-200 bg-green-50 px-5 py-4 text-green-700 font-medium"
+  >
           <div className="flex items-start justify-between gap-4">
             <p>{successMessage}</p>
             <button
@@ -464,7 +784,10 @@ export const ClientRequestService: React.FC = () => {
       )}
 
       {errorMessage && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-red-700 font-medium">
+  <div
+    ref={feedbackRef}
+    className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-red-700 font-medium"
+  >
           <div className="flex items-start justify-between gap-4">
             <p>{errorMessage}</p>
             <button
@@ -544,6 +867,52 @@ export const ClientRequestService: React.FC = () => {
           </div>
         </div>
 
+        <div className="mb-6 rounded-3xl border border-gray-200 bg-gray-50 p-5">
+          <label className="mb-2 block text-sm font-bold text-gray-700">
+            {isArabic ? 'عملة عرض الأسعار' : 'Price Display Currency'}
+          </label>
+
+          <select
+            value={selectedCurrency}
+            onChange={(e) => setSelectedCurrency(e.target.value as CurrencyCode)}
+            className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+          >
+            {currencies.map((currency) => (
+              <option key={currency.value} value={currency.value}>
+                {currency.value} — {isArabic ? currency.ar : currency.en}
+              </option>
+            ))}
+          </select>
+
+          <p className="mt-2 text-xs leading-6 text-gray-500">
+            {isArabic
+              ? 'الأسعار الأصلية بالدينار الجزائري، ويتم تحويلها تلقائياً حسب أسعار الصرف الحالية.'
+              : 'Original prices are in Algerian Dinar and are automatically converted using current exchange rates.'}
+          </p>
+
+          {ratesLoading && (
+            <p className="mt-2 text-xs font-semibold text-blue-600">
+              {isArabic
+                ? 'جاري تحميل أسعار الصرف...'
+                : 'Loading exchange rates...'}
+            </p>
+          )}
+
+          {ratesError && (
+            <p className="mt-2 text-xs font-semibold text-red-600">
+              {ratesError}
+            </p>
+          )}
+
+          {ratesLastUpdated && !ratesLoading && (
+            <p className="mt-2 text-xs text-gray-400">
+              {isArabic
+                ? `آخر تحديث لسعر الصرف: ${ratesLastUpdated}`
+                : `Exchange rate last updated: ${ratesLastUpdated}`}
+            </p>
+          )}
+        </div>
+
         <h3 className="mb-4 text-lg font-semibold">
           {isArabic ? 'اختر الباقة' : 'Choose a Plan'}
         </h3>
@@ -551,6 +920,14 @@ export const ClientRequestService: React.FC = () => {
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
           {selectedService.plans.map((plan) => {
             const active = selectedPlanId === plan.id;
+
+            const displayPrice = getConvertedPlanPrice({
+              plan,
+              currency: selectedCurrency,
+              rates,
+              isArabic,
+              ratesLoading,
+            });
 
             return (
               <button
@@ -568,7 +945,7 @@ export const ClientRequestService: React.FC = () => {
                       {isArabic ? plan.nameAr : plan.nameEn}
                     </h4>
                     <p className="mt-2 text-2xl font-black text-blue-600">
-                      {isArabic ? plan.priceAr : plan.priceEn}
+                      {displayPrice}
                     </p>
                   </div>
 
@@ -612,13 +989,13 @@ export const ClientRequestService: React.FC = () => {
               </p>
               <p className="mt-1 font-semibold text-blue-600">
                 {isArabic ? selectedPlan.nameAr : selectedPlan.nameEn} —{' '}
-                {isArabic ? selectedPlan.priceAr : selectedPlan.priceEn}
+                {selectedPlanPrice}
               </p>
             </div>
 
             <button
               onClick={requestService}
-              disabled={loading}
+              disabled={requestDisabled}
               className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-6 py-3 font-bold text-white hover:bg-blue-700 disabled:opacity-60"
             >
               <Send className="h-5 w-5" />

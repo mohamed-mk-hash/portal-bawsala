@@ -1,102 +1,118 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   addDoc,
   collection,
-  doc,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   Timestamp,
-  updateDoc,
 } from 'firebase/firestore';
 import {
   BriefcaseBusiness,
-  Building2,
-  CheckCircle,
-  Clock3,
-  Mail,
-  Send,
-  ShieldCheck,
-  XCircle,
+  Eye,
+  Plus,
+  Search,
+  Tag,
+  X,
 } from 'lucide-react';
 import { Card } from '../components/Card';
 import { db } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 
-type ServiceStatus =
-  | 'not_started'
-  | 'in_progress'
-  | 'waiting_client'
-  | 'completed'
-  | 'paused';
+type ServiceForm = {
+  type: string;
+  name: string;
+  domain: string;
+  price: number;
+};
 
-type CompletionApprovalStatus = 'none' | 'pending' | 'approved' | 'refused';
-
-type CurrentService = {
+type AvailableService = Partial<ServiceForm> & {
   id: string;
-  clientId: string;
-  clientName: string;
-  clientEmail: string;
-  companyName: string;
-
-  serviceRequestId?: string;
-
-  serviceId: string;
-  serviceNameAr: string;
-  serviceNameEn: string;
-
-  planId: string;
-  planNameAr: string;
-  planNameEn: string;
-
-  planPriceAr: string;
-  planPriceEn: string;
-
-  status: ServiceStatus;
-  progress: number;
-
-  completionApprovalStatus?: CompletionApprovalStatus;
-  completionRefusalReason?: string;
-  completionRefusalNote?: string;
-
-  adminNote?: string;
-  teamNote?: string;
-
+  recordType?: string;
+  currency?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };
 
-const statusOptions: {
-  value: ServiceStatus;
-  ar: string;
-  en: string;
-}[] = [
-  { value: 'not_started', ar: 'لم تبدأ', en: 'Not Started' },
-  { value: 'in_progress', ar: 'قيد العمل', en: 'In Progress' },
-  { value: 'waiting_client', ar: 'بانتظار العميل', en: 'Waiting for Client' },
-  { value: 'completed', ar: 'مكتملة', en: 'Completed' },
-  { value: 'paused', ar: 'متوقفة مؤقتاً', en: 'Paused' },
+type DetailItem = [label: string, value: unknown, ltr?: boolean];
+
+type Option = {
+  value: string;
+  label: string;
+};
+
+const serviceTypes = [
+  'موقع إلكتروني',
+  'متجر إلكتروني',
+  'تسويق رقمي',
+  'تصميم',
+  'محتوى',
+  'تدريب',
+  'مناهج وبرامج',
+  'حقائب تدريبية',
+  'تطوير إداري',
+  'خدمة إضافية',
 ];
+
+const serviceDomains = [
+  'قسم إدارة المواقع',
+  'قسم إدارة منصات التواصل الاجتماعي',
+  'قسم المناهج والبرامج',
+  'قسم إعداد الحقائب التدريبية',
+  'قسم التطوير الإداري',
+  'منتجات بوصلة',
+  'الخدمات الإضافية',
+];
+
+const emptyForm: ServiceForm = {
+  type: serviceTypes[0],
+  name: '',
+  domain: serviceDomains[0],
+  price: 0,
+};
+
+const ltrValueClass =
+  'inline-block text-left [direction:ltr] [unicode-bidi:plaintext]';
+
+const textOrDash = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return '-';
+  return String(value);
+};
+
+const makeOptions = (values: string[]): Option[] =>
+  values.map((value) => ({ value, label: value || '-' }));
+
+const formatMoney = (amount: number, currency = 'DZD') => {
+  return `${Number(amount || 0).toLocaleString()} ${currency}`;
+};
 
 export const CurrentServices: React.FC = () => {
   const { isArabic } = useLanguage();
 
-  const [services, setServices] = useState<CurrentService[]>([]);
+  const [services, setServices] = useState<AvailableService[]>([]);
   const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState<ServiceForm>(emptyForm);
+  const [search, setSearch] = useState('');
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
-  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [selectedService, setSelectedService] = useState<AvailableService | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db, 'services'), orderBy('createdAt', 'desc'));
+    const servicesQuery = query(
+      collection(db, 'availableServices'),
+      orderBy('createdAt', 'desc')
+    );
 
     const unsubscribe = onSnapshot(
-      q,
+      servicesQuery,
       (snapshot) => {
         const data = snapshot.docs.map((item) => ({
           id: item.id,
           ...item.data(),
-        })) as CurrentService[];
+        })) as AvailableService[];
 
         setServices(data);
         setLoading(false);
@@ -104,10 +120,10 @@ export const CurrentServices: React.FC = () => {
       (error) => {
         console.error(error);
         setLoading(false);
-        setMessage(
+        setError(
           isArabic
-            ? 'تعذر تحميل الخدمات الحالية. تحقق من صلاحيات Firestore أو الفهارس.'
-            : 'Could not load current services. Check Firestore permissions or indexes.'
+            ? 'تعذر تحميل الخدمات. تحقق من صلاحيات Firestore.'
+            : 'Could not load services. Check Firestore permissions.'
         );
       }
     );
@@ -115,176 +131,148 @@ export const CurrentServices: React.FC = () => {
     return () => unsubscribe();
   }, [isArabic]);
 
-  const createStatusNotification = async (service: CurrentService) => {
-    const statusAr = getStatusLabel(service.status, true);
-    const statusEn = getStatusLabel(service.status, false);
+  const filteredServices = useMemo(() => {
+    const text = search.trim().toLowerCase();
+    if (!text) return services;
 
-    const isCompleted = service.status === 'completed';
+    return services.filter((service) =>
+      [service.type, service.name, service.domain, service.price]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(text)
+    );
+  }, [services, search]);
 
-    await addDoc(collection(db, 'notifications'), {
-      clientId: service.clientId,
-      type: 'service_status_updated',
-      titleAr: isCompleted
-        ? 'الخدمة جاهزة للتأكيد'
-        : 'تم تحديث حالة الخدمة',
-      titleEn: isCompleted
-        ? 'Service ready for confirmation'
-        : 'Service status updated',
-      messageAr: isCompleted
-        ? `تم تحديد خدمة ${service.serviceNameAr} كمكتملة. يرجى تأكيد إن كانت الخدمة منتهية من جهتك.`
-        : `تم تحديث حالة خدمة ${service.serviceNameAr} إلى: ${statusAr}. نسبة التقدم الحالية: ${service.progress}%.`,
-      messageEn: isCompleted
-        ? `Your ${service.serviceNameEn} service was marked as completed. Please confirm if it is finished from your side.`
-        : `Your ${service.serviceNameEn} service status was updated to: ${statusEn}. Current progress: ${service.progress}%.`,
-      isRead: false,
-      createdAt: serverTimestamp(),
-      serviceId: service.id,
-      serviceNameAr: service.serviceNameAr,
-      serviceNameEn: service.serviceNameEn,
-      status: service.status,
-      progress: service.progress,
-    });
+  const totalValue = services.reduce(
+    (sum, service) => sum + Number(service.price || 0),
+    0
+  );
+
+  const updateForm = <K extends keyof ServiceForm>(
+    key: K,
+    value: ServiceForm[K]
+  ) => {
+    setForm((current) => ({ ...current, [key]: value }));
   };
 
-  const updateService = async (
-  service: CurrentService,
-  updates: Partial<CurrentService>,
-  notifyClient = false
-) => {
-  try {
-    setProcessingId(service.id);
+  const openAddModal = () => {
     setMessage('');
+    setError('');
+    setForm(emptyForm);
+    setIsAddModalOpen(true);
+  };
 
-    const nextStatus: ServiceStatus =
-      updates.status ?? service.status ?? 'not_started';
+  const closeAddModal = () => {
+    if (saving) return;
+    setIsAddModalOpen(false);
+  };
 
-    const finalProgress =
-      nextStatus === 'completed'
-        ? 100
-        : Number(updates.progress ?? service.progress ?? 0);
+  const createService = async (e: React.FormEvent) => {
+    e.preventDefault();
 
-    let completionApprovalStatus: CompletionApprovalStatus = 'none';
+    try {
+      setSaving(true);
+      setMessage('');
+      setError('');
 
-    if (nextStatus === 'completed') {
-      if (
-        service.completionApprovalStatus === 'approved' ||
-        service.completionApprovalStatus === 'refused'
-      ) {
-        completionApprovalStatus = service.completionApprovalStatus;
-      } else {
-        completionApprovalStatus = 'pending';
+      if (!form.name.trim()) {
+        setError(isArabic ? 'أدخل اسم الخدمة.' : 'Please enter the service name.');
+        return;
       }
+
+      if (!form.type.trim()) {
+        setError(isArabic ? 'اختر نوع الخدمة.' : 'Please choose the service type.');
+        return;
+      }
+
+      if (!form.domain.trim()) {
+        setError(isArabic ? 'اختر مجال الخدمة.' : 'Please choose the service domain.');
+        return;
+      }
+
+      await addDoc(collection(db, 'availableServices'), {
+        recordType: 'availableService',
+        type: form.type.trim(),
+        name: form.name.trim(),
+        domain: form.domain.trim(),
+        price: Number(form.price || 0),
+        currency: 'DZD',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      setMessage(isArabic ? 'تمت إضافة الخدمة بنجاح.' : 'Service added successfully.');
+      setForm(emptyForm);
+      setIsAddModalOpen(false);
+    } catch (error) {
+      console.error(error);
+      setError(isArabic ? 'حدث خطأ أثناء إضافة الخدمة.' : 'Failed to add the service.');
+    } finally {
+      setSaving(false);
     }
-
-    const payload = {
-      ...updates,
-      status: nextStatus,
-      progress: finalProgress,
-      completionApprovalStatus,
-      updatedAt: serverTimestamp(),
-    };
-
-    await updateDoc(doc(db, 'services', service.id), payload);
-
-    if (notifyClient) {
-      await createStatusNotification({
-        ...service,
-        ...updates,
-        status: nextStatus,
-        progress: finalProgress,
-        completionApprovalStatus,
-      } as CurrentService);
-    }
-
-    setMessage(
-      isArabic
-        ? 'تم تحديث الخدمة وإشعار العميل بنجاح.'
-        : 'Service updated and client notified successfully.'
-    );
-  } catch (error) {
-    console.error(error);
-    setMessage(
-      isArabic
-        ? 'حدث خطأ أثناء تحديث الخدمة.'
-        : 'Failed to update service.'
-    );
-  } finally {
-    setProcessingId(null);
-  }
-};
-  const totalCount = services.length;
-  const activeCount = services.filter((s) => s.status === 'in_progress').length;
-  const waitingCount = services.filter(
-    (s) => s.status === 'waiting_client'
-  ).length;
-  const completedCount = services.filter((s) => s.status === 'completed').length;
+  };
 
   return (
-    <div className="space-y-7">
-      <div>
-        <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700">
-          <BriefcaseBusiness className="h-4 w-4" />
-          {isArabic ? 'إدارة الخدمات' : 'Services Management'}
+    <div dir={isArabic ? 'rtl' : 'ltr'} className="space-y-7">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700">
+            <BriefcaseBusiness className="h-4 w-4" />
+            {isArabic ? 'إدارة الخدمات' : 'Service Management'}
+          </div>
+          <h1 className="mt-4 text-3xl font-black text-gray-950">
+            {isArabic ? 'الخدمات' : 'Services'}
+          </h1>
+          <p className="mt-2 text-gray-500">
+            {isArabic
+              ? 'أضف الخدمات المتوفرة في شركة بوصلة حتى يتم اختيارها لاحقاً عند إنشاء صفقة.'
+              : 'Add Bawsala services here so they can be selected later when creating deals.'}
+          </p>
         </div>
 
-        <h1 className="mt-4 text-3xl font-black text-gray-950">
-          {isArabic ? 'الخدمات الحالية' : 'Current Services'}
-        </h1>
-
-        <p className="mt-2 text-gray-500">
-          {isArabic
-            ? 'تابع الخدمات المقبولة، حدّث حالتها، نسبة التقدم، وموافقة العميل النهائية.'
-            : 'Track accepted services, update status, progress, and final client confirmation.'}
-        </p>
+        <button
+          type="button"
+          onClick={openAddModal}
+          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 font-bold text-white hover:bg-blue-700"
+        >
+          <Plus className="h-5 w-5" />
+          {isArabic ? 'إضافة خدمة' : 'Add Service'}
+        </button>
       </div>
 
-      {message && (
-        <div className="rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 font-medium text-blue-700">
-          <div className="flex items-start justify-between gap-4">
-            <p>{message}</p>
-            <button
-              onClick={() => setMessage('')}
-              className="font-bold text-blue-600 hover:text-blue-800"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
+      {message && <Feedback tone="blue" message={message} onClose={() => setMessage('')} />}
+      {error && <Feedback tone="red" message={error} onClose={() => setError('')} />}
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-4">
-        <StatsCard
-          label={isArabic ? 'كل الخدمات' : 'All Services'}
-          value={totalCount}
-          tone="blue"
-        />
-        <StatsCard
-          label={isArabic ? 'قيد العمل' : 'In Progress'}
-          value={activeCount}
-          tone="green"
-        />
-        <StatsCard
-          label={isArabic ? 'بانتظار العميل' : 'Waiting Client'}
-          value={waitingCount}
-          tone="yellow"
-        />
-        <StatsCard
-          label={isArabic ? 'مكتملة' : 'Completed'}
-          value={completedCount}
-          tone="purple"
-        />
+        <StatCard label={isArabic ? 'إجمالي الخدمات' : 'Total Services'} value={services.length.toString()} />
+        <StatCard label={isArabic ? 'أنواع الخدمات' : 'Service Types'} value={new Set(services.map((item) => item.type).filter(Boolean)).size.toString()} />
+        <StatCard label={isArabic ? 'المجالات' : 'Domains'} value={new Set(services.map((item) => item.domain).filter(Boolean)).size.toString()} />
+        <StatCard label={isArabic ? 'إجمالي الأسعار' : 'Total Prices'} value={formatMoney(totalValue)} ltr />
       </div>
 
       <Card>
-        <div className="mb-6">
-          <h2 className="text-xl font-black text-gray-950">
-            {isArabic ? 'قائمة الخدمات' : 'Services List'}
-          </h2>
-          <p className="mt-1 text-sm text-gray-500">
-            {isArabic
-              ? 'لا يمكن إنشاء فاتورة إلا بعد اكتمال الخدمة وموافقة العميل عليها.'
-              : 'Invoices can only be created after the service is completed and approved by the client.'}
-          </p>
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="text-xl font-black text-gray-950">
+              {isArabic ? 'جدول الخدمات' : 'Service Table'}
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              {isArabic
+                ? 'قائمة مختصرة للخدمات المتوفرة مع إمكانية فتح التفاصيل.'
+                : 'A compact list of available services with details popup.'}
+            </p>
+          </div>
+
+          <div className="relative w-full lg:w-96">
+            <Search className={`absolute top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 ${isArabic ? 'right-4' : 'left-4'}`} />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={isArabic ? 'بحث عن خدمة...' : 'Search service...'}
+              className={`w-full rounded-2xl border border-gray-200 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${isArabic ? 'pr-11 pl-4' : 'pl-11 pr-4'}`}
+            />
+          </div>
         </div>
 
         {loading && (
@@ -293,457 +281,321 @@ export const CurrentServices: React.FC = () => {
           </p>
         )}
 
-        {!loading && services.length === 0 && (
+        {!loading && filteredServices.length === 0 && (
           <div className="rounded-3xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center">
-            <BriefcaseBusiness className="mx-auto h-10 w-10 text-gray-300" />
-            <p className="mt-4 font-bold text-gray-600">
-              {isArabic
-                ? 'لا توجد خدمات حالية بعد. عند قبول طلب خدمة ستظهر هنا.'
-                : 'No current services yet. Accepted service requests will appear here.'}
+            <BriefcaseBusiness className="mx-auto h-12 w-12 text-gray-300" />
+            <h3 className="mt-4 text-lg font-black text-gray-700">
+              {isArabic ? 'لا توجد خدمات بعد' : 'No services yet'}
+            </h3>
+            <p className="mt-2 text-sm text-gray-500">
+              {isArabic ? 'اضغط إضافة خدمة لإضافة أول خدمة.' : 'Click Add Service to add the first service.'}
             </p>
           </div>
         )}
 
-        {!loading && services.length > 0 && (
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-            {services.map((service) => (
-              <ServiceCard
-                key={service.id}
-                service={service}
-                isArabic={isArabic}
-                processingId={processingId}
-                onUpdate={updateService}
-              />
-            ))}
+        {!loading && filteredServices.length > 0 && (
+          <div className="overflow-hidden rounded-3xl border border-gray-100">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[850px] text-sm">
+                <thead className="bg-slate-950 text-white">
+                  <tr>
+                    <TableHead label={isArabic ? 'النوع' : 'Type'} />
+                    <TableHead label={isArabic ? 'الإسم' : 'Name'} />
+                    <TableHead label={isArabic ? 'المجال' : 'Domain'} />
+                    <TableHead label={isArabic ? 'السعر' : 'Price'} />
+                    <TableHead label={isArabic ? 'التفاصيل' : 'Details'} />
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {filteredServices.map((service) => (
+                    <tr key={service.id} className="transition hover:bg-blue-50/50">
+                      <TableCell strong value={textOrDash(service.type)} />
+                      <TableCell value={textOrDash(service.name)} />
+                      <TableCell value={textOrDash(service.domain)} />
+                      <TableCell ltr value={formatMoney(Number(service.price || 0), service.currency || 'DZD')} />
+                      <td className="whitespace-nowrap px-5 py-4">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedService(service)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700"
+                        >
+                          <Eye className="h-4 w-4" />
+                          {isArabic ? 'التفاصيل' : 'Details'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </Card>
+
+      {isAddModalOpen && (
+        <AddServiceModal
+          isArabic={isArabic}
+          form={form}
+          saving={saving}
+          onClose={closeAddModal}
+          onSubmit={createService}
+          updateForm={updateForm}
+        />
+      )}
+
+      {selectedService && (
+        <ServiceDetailsModal
+          service={selectedService}
+          isArabic={isArabic}
+          onClose={() => setSelectedService(null)}
+        />
+      )}
     </div>
   );
 };
 
-function ServiceCard({
-  service,
+function AddServiceModal({
   isArabic,
-  processingId,
-  onUpdate,
+  form,
+  saving,
+  onClose,
+  onSubmit,
+  updateForm,
 }: {
-  service: CurrentService;
   isArabic: boolean;
-  processingId: string | null;
-  onUpdate: (
-    service: CurrentService,
-    updates: Partial<CurrentService>,
-    notifyClient?: boolean
-  ) => Promise<void>;
+  form: ServiceForm;
+  saving: boolean;
+  onClose: () => void;
+  onSubmit: (e: React.FormEvent) => void;
+  updateForm: <K extends keyof ServiceForm>(key: K, value: ServiceForm[K]) => void;
 }) {
-  const [status, setStatus] = useState<ServiceStatus>(service.status);
-  const [progress, setProgress] = useState(service.progress || 0);
-  const [teamNote, setTeamNote] = useState(service.teamNote || '');
-  const [adminNote, setAdminNote] = useState(service.adminNote || '');
-
-  useEffect(() => {
-    setStatus(service.status);
-    setProgress(service.progress || 0);
-    setTeamNote(service.teamNote || '');
-    setAdminNote(service.adminNote || '');
-  }, [service]);
-
-  useEffect(() => {
-    if (status === 'completed') {
-      setProgress(100);
-    }
-  }, [status]);
-
-  const approvalStatus = service.completionApprovalStatus || 'none';
-
-  const saveChanges = async () => {
-    const finalProgress = status === 'completed' ? 100 : Number(progress);
-
-    await onUpdate(
-      service,
-      {
-        status,
-        progress: finalProgress,
-        teamNote,
-        adminNote,
-      },
-      true
-    );
-  };
-
   return (
-    <div className="overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-xl">
-      <div className="bg-gradient-to-br from-slate-950 to-blue-950 p-6 text-white">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-white/60">
-              {isArabic ? 'خدمة حالية' : 'Current Service'}
-            </p>
-
-            <h3 className="mt-2 text-2xl font-black">
-              {isArabic ? service.serviceNameAr : service.serviceNameEn}
-            </h3>
-
-            <p className="mt-2 text-sm text-white/70">
-              {isArabic ? service.planNameAr : service.planNameEn}
-            </p>
-          </div>
-
-          <StatusBadge status={status} isArabic={isArabic} />
-        </div>
-      </div>
-
-      <div className="space-y-5 p-6">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <InfoItem
-            icon={<Building2 className="h-5 w-5" />}
-            label={isArabic ? 'الشركة' : 'Company'}
-            value={service.companyName}
-          />
-
-          <InfoItem
-            icon={<Mail className="h-5 w-5" />}
-            label={isArabic ? 'العميل' : 'Client'}
-            value={service.clientName}
-            subValue={service.clientEmail}
-          />
-        </div>
-
-        <div className="rounded-3xl bg-gray-50 p-5">
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-            <SmallInfo
-              label={isArabic ? 'الخدمة' : 'Service'}
-              value={isArabic ? service.serviceNameAr : service.serviceNameEn}
-            />
-            <SmallInfo
-              label={isArabic ? 'الباقة' : 'Plan'}
-              value={isArabic ? service.planNameAr : service.planNameEn}
-            />
-            <SmallInfo
-              label={isArabic ? 'السعر' : 'Price'}
-              value={isArabic ? service.planPriceAr : service.planPriceEn}
-              blue
-            />
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-5">
-          <div className="mb-4 flex items-center justify-between">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <form
+        onSubmit={onSubmit}
+        className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+      >
+        <div className="flex flex-none items-start justify-between gap-4 border-b border-gray-100 px-6 py-5">
+          <div className="flex items-start gap-3">
+            <div className="rounded-2xl bg-blue-100 p-3 text-blue-600">
+              <Plus className="h-6 w-6" />
+            </div>
             <div>
-              <p className="text-sm font-bold text-gray-700">
-                {isArabic ? 'نسبة التقدم' : 'Progress'}
-              </p>
-              <p className="mt-1 text-xs text-gray-400">
+              <h2 className="text-xl font-black text-gray-950">
+                {isArabic ? 'إضافة خدمة جديدة' : 'Add New Service'}
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
                 {isArabic
-                  ? 'عند اختيار مكتملة تصبح النسبة 100% تلقائياً.'
-                  : 'When Completed is selected, progress becomes 100% automatically.'}
+                  ? 'أدخل بيانات الخدمة المتوفرة داخل شركة بوصلة.'
+                  : 'Enter the available service information.'}
               </p>
             </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-2xl bg-gray-100 p-3 text-gray-500 hover:bg-gray-200"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
 
-            <div className="rounded-2xl bg-blue-50 px-4 py-2 text-xl font-black text-blue-700">
-              {progress}%
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6">
+          <FormSection title={isArabic ? 'بيانات الخدمة' : 'Service Information'} icon={<Tag className="h-5 w-5" />}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <SelectField
+                label={isArabic ? 'النوع' : 'Type'}
+                value={form.type}
+                onChange={(value) => updateForm('type', value)}
+                options={makeOptions(serviceTypes)}
+                required
+              />
+              <TextField
+                label={isArabic ? 'الإسم' : 'Name'}
+                value={form.name}
+                onChange={(value) => updateForm('name', value)}
+                required
+              />
+              <SelectField
+                label={isArabic ? 'المجال' : 'Domain'}
+                value={form.domain}
+                onChange={(value) => updateForm('domain', value)}
+                options={makeOptions(serviceDomains)}
+                required
+              />
+              <NumberField
+                label={isArabic ? 'السعر' : 'Price'}
+                value={form.price}
+                onChange={(value) => updateForm('price', value)}
+                min={0}
+              />
             </div>
-          </div>
-
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={progress}
-            disabled={status === 'completed'}
-            onChange={(e) => setProgress(Number(e.target.value))}
-            className="h-3 w-full cursor-pointer appearance-none rounded-full bg-gray-200 accent-blue-600 disabled:cursor-not-allowed disabled:opacity-70"
-          />
-
-          <div className="mt-3 flex justify-between text-xs font-bold text-gray-400">
-            <span>0%</span>
-            <span>50%</span>
-            <span>100%</span>
-          </div>
+          </FormSection>
         </div>
 
-        <div>
-          <label className="mb-3 block text-sm font-bold text-gray-700">
-            {isArabic ? 'حالة الخدمة' : 'Service Status'}
-          </label>
-
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {statusOptions.map((option) => {
-              const active = status === option.value;
-
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setStatus(option.value)}
-                  className={`rounded-2xl border px-4 py-3 text-sm font-bold transition ${
-                    active
-                      ? 'border-blue-500 bg-blue-50 text-blue-700 ring-2 ring-blue-100'
-                      : 'border-gray-200 bg-white text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'
-                  }`}
-                >
-                  {isArabic ? option.ar : option.en}
-                </button>
-              );
-            })}
-          </div>
+        <div className="flex flex-none flex-col gap-3 border-t border-gray-100 bg-gray-50 p-6 sm:flex-row">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="flex-1 rounded-2xl border border-gray-200 bg-white px-5 py-3 font-bold text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+          >
+            {isArabic ? 'إلغاء' : 'Cancel'}
+          </button>
+          <button
+            disabled={saving}
+            className="flex-1 rounded-2xl bg-blue-600 px-5 py-3 font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving
+              ? isArabic
+                ? 'جاري الحفظ...'
+                : 'Saving...'
+              : isArabic
+                ? 'حفظ الخدمة'
+                : 'Save Service'}
+          </button>
         </div>
-
-        <CompletionApprovalBox
-          status={approvalStatus}
-          service={service}
-          isArabic={isArabic}
-        />
-
-        <div>
-          <label className="mb-2 block text-sm font-bold text-gray-700">
-            {isArabic ? 'ملاحظة الفريق' : 'Team Note'}
-          </label>
-
-          <textarea
-            value={teamNote}
-            onChange={(e) => setTeamNote(e.target.value)}
-            rows={3}
-            className="w-full resize-none rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder={
-              isArabic
-                ? 'مثلاً: تم الانتهاء من المرحلة الأولى...'
-                : 'Example: First phase has been completed...'
-            }
-          />
-        </div>
-
-        <div>
-          <label className="mb-2 block text-sm font-bold text-gray-700">
-            {isArabic ? 'ملاحظة داخلية للإدارة' : 'Internal Admin Note'}
-          </label>
-
-          <textarea
-            value={adminNote}
-            onChange={(e) => setAdminNote(e.target.value)}
-            rows={2}
-            className="w-full resize-none rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder={
-              isArabic
-                ? 'ملاحظة لا تظهر للعميل...'
-                : 'A note that is not shown to the client...'
-            }
-          />
-        </div>
-
-        <div className="flex items-center gap-2 text-sm text-gray-500">
-          <Clock3 className="h-4 w-4" />
-          {service.createdAt
-            ? service.createdAt
-                .toDate()
-                .toLocaleDateString(isArabic ? 'ar-DZ' : 'en-US')
-            : '-'}
-        </div>
-
-        <button
-          onClick={saveChanges}
-          disabled={processingId === service.id}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-bold text-white transition hover:bg-blue-700 disabled:opacity-50"
-        >
-          <Send className="h-5 w-5" />
-          {processingId === service.id
-            ? isArabic
-              ? 'جاري الحفظ...'
-              : 'Saving...'
-            : isArabic
-            ? 'حفظ التحديث وإشعار العميل'
-            : 'Save Update & Notify Client'}
-        </button>
-      </div>
+      </form>
     </div>
   );
 }
 
-function CompletionApprovalBox({
-  status,
+function ServiceDetailsModal({
   service,
   isArabic,
+  onClose,
 }: {
-  status: CompletionApprovalStatus;
-  service: CurrentService;
+  service: AvailableService;
   isArabic: boolean;
+  onClose: () => void;
 }) {
-  if (service.status !== 'completed') {
-    return (
-      <div className="rounded-3xl border border-gray-100 bg-gray-50 p-5">
-        <p className="text-sm font-bold text-gray-500">
-          {isArabic ? 'موافقة العميل النهائية' : 'Final Client Approval'}
-        </p>
-        <p className="mt-2 text-sm text-gray-500">
-          {isArabic
-            ? 'ستظهر الموافقة بعد تحديد الخدمة كمكتملة.'
-            : 'Approval will appear after marking the service as completed.'}
-        </p>
-      </div>
-    );
-  }
+  const details: DetailItem[] = [
+    [isArabic ? 'النوع' : 'Type', service.type],
+    [isArabic ? 'الإسم' : 'Name', service.name],
+    [isArabic ? 'المجال' : 'Domain', service.domain],
+    [isArabic ? 'السعر' : 'Price', formatMoney(Number(service.price || 0), service.currency || 'DZD'), true],
+  ];
 
-  if (status === 'approved') {
-    return (
-      <div className="rounded-3xl border border-green-200 bg-green-50 p-5 text-green-700">
-        <div className="flex items-center gap-3">
-          <CheckCircle className="h-5 w-5" />
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <div dir={isArabic ? 'rtl' : 'ltr'} className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-6 py-5">
           <div>
-            <p className="font-black">
-              {isArabic ? 'العميل وافق على اكتمال الخدمة' : 'Client approved completion'}
+            <p className="text-sm font-bold text-blue-600">
+              {isArabic ? 'تفاصيل الخدمة' : 'Service Details'}
             </p>
-            <p className="mt-1 text-sm">
-              {isArabic
-                ? 'يمكن الآن إنشاء فاتورة لهذه الخدمة.'
-                : 'You can now create an invoice for this service.'}
+            <h2 className="mt-1 text-2xl font-black text-gray-950">
+              {textOrDash(service.name)}
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              {textOrDash(service.domain)}
             </p>
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-2xl bg-gray-100 p-3 text-gray-500 hover:bg-gray-200"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
-      </div>
-    );
-  }
-
-  if (status === 'refused') {
-    return (
-      <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-red-700">
-        <div className="flex items-start gap-3">
-          <XCircle className="mt-1 h-5 w-5" />
-          <div>
-            <p className="font-black">
-              {isArabic ? 'العميل رفض تأكيد اكتمال الخدمة' : 'Client refused completion'}
-            </p>
-            <p className="mt-2 text-sm font-bold">
-              {isArabic ? 'السبب:' : 'Reason:'}{' '}
-              {service.completionRefusalReason || '-'}
-            </p>
-            {service.completionRefusalNote && (
-              <p className="mt-2 text-sm leading-7">
-                {service.completionRefusalNote}
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-3xl border border-yellow-200 bg-yellow-50 p-5 text-yellow-800">
-      <div className="flex items-center gap-3">
-        <ShieldCheck className="h-5 w-5" />
-        <div>
-          <p className="font-black">
-            {isArabic ? 'بانتظار موافقة العميل' : 'Waiting for client approval'}
-          </p>
-          <p className="mt-1 text-sm">
-            {isArabic
-              ? 'لا يمكن إنشاء فاتورة حتى يؤكد العميل أن الخدمة انتهت.'
-              : 'An invoice cannot be created until the client confirms the service is finished.'}
-          </p>
+        <div className="max-h-[calc(92vh-112px)] overflow-y-auto p-6">
+          <DetailsSection title={isArabic ? 'بيانات الخدمة' : 'Service Information'} items={details} />
         </div>
       </div>
     </div>
   );
 }
 
-function StatsCard({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: 'blue' | 'yellow' | 'green' | 'purple';
-}) {
-  const styles = {
-    blue: 'bg-blue-50 text-blue-700',
-    yellow: 'bg-yellow-50 text-yellow-700',
-    green: 'bg-green-50 text-green-700',
-    purple: 'bg-purple-50 text-purple-700',
-  };
-
+function Feedback({ tone, message, onClose }: { tone: 'blue' | 'red'; message: string; onClose?: () => void }) {
+  const styles = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : 'border-blue-200 bg-blue-50 text-blue-700';
   return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-gray-500">{label}</p>
-        <div className={`rounded-2xl px-3 py-2 text-xs font-black ${styles[tone]}`}>
-          LIVE
-        </div>
-      </div>
-
-      <p className="mt-4 text-4xl font-black text-gray-950">{value}</p>
-    </div>
-  );
-}
-
-function InfoItem({
-  icon,
-  label,
-  value,
-  subValue,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  subValue?: string;
-}) {
-  return (
-    <div className="flex items-start gap-3 rounded-2xl border border-gray-100 p-4">
-      <div className="rounded-xl bg-blue-50 p-2 text-blue-600">{icon}</div>
-      <div>
-        <p className="text-xs font-bold text-gray-400">{label}</p>
-        <p className="mt-1 font-bold text-gray-900">{value}</p>
-        {subValue && <p className="mt-1 text-xs text-gray-500">{subValue}</p>}
+    <div className={`rounded-2xl border px-5 py-4 font-medium ${styles}`}>
+      <div className="flex items-start justify-between gap-4">
+        <p>{message}</p>
+        {onClose && <button type="button" onClick={onClose} className="font-bold opacity-70 hover:opacity-100">×</button>}
       </div>
     </div>
   );
 }
 
-function SmallInfo({
-  label,
-  value,
-  blue,
-}: {
-  label: string;
-  value: string;
-  blue?: boolean;
-}) {
+function StatCard({ label, value, ltr }: { label: string; value: string; ltr?: boolean }) {
   return (
-    <div>
-      <p className="text-xs font-bold text-gray-400">{label}</p>
-      <p className={`mt-1 font-bold ${blue ? 'text-blue-600' : 'text-gray-900'}`}>
+    <Card>
+      <p className="text-sm font-bold text-gray-500">{label}</p>
+      <p dir={ltr ? 'ltr' : undefined} className={`mt-2 text-2xl font-black text-gray-950 ${ltr ? ltrValueClass : ''}`}>
         {value}
       </p>
+    </Card>
+  );
+}
+
+function TableHead({ label }: { label: string }) {
+  return <th className="whitespace-nowrap px-5 py-4 text-start text-xs font-black uppercase tracking-wide">{label}</th>;
+}
+
+function TableCell({ value, strong, ltr }: { value: string; strong?: boolean; ltr?: boolean }) {
+  return (
+    <td className={`max-w-[300px] whitespace-nowrap px-5 py-4 ${strong ? 'font-black text-gray-950' : 'font-medium text-gray-700'}`} title={value}>
+      <span dir={ltr ? 'ltr' : undefined} className={`block overflow-hidden text-ellipsis ${ltr ? ltrValueClass : ''}`}>{value}</span>
+    </td>
+  );
+}
+
+function DetailsSection({ title, items }: { title: string; items: DetailItem[] }) {
+  return (
+    <div className="rounded-3xl border border-gray-100 p-5">
+      <h3 className="mb-4 font-black text-gray-950">{title}</h3>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        {items.map(([label, value, ltr]) => (
+          <div key={label} className="rounded-2xl bg-gray-50 p-4">
+            <p className="text-xs font-bold text-gray-400">{label}</p>
+            <p dir={ltr ? 'ltr' : undefined} className={`mt-1 break-words font-bold text-gray-900 ${ltr ? ltrValueClass : ''}`}>{textOrDash(value)}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-function StatusBadge({
-  status,
-  isArabic,
-}: {
-  status: ServiceStatus;
-  isArabic: boolean;
-}) {
-  const styles: Record<ServiceStatus, string> = {
-    not_started: 'bg-gray-400/15 text-gray-100 border-gray-300/20',
-    in_progress: 'bg-blue-400/15 text-blue-200 border-blue-300/20',
-    waiting_client: 'bg-yellow-400/15 text-yellow-200 border-yellow-300/20',
-    completed: 'bg-green-400/15 text-green-200 border-green-300/20',
-    paused: 'bg-red-400/15 text-red-200 border-red-300/20',
-  };
-
+function FormSection({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <span
-      className={`rounded-full border px-4 py-2 text-xs font-black ${styles[status]}`}
-    >
-      {getStatusLabel(status, isArabic)}
-    </span>
+    <div className="rounded-3xl border border-gray-100 p-5">
+      <div className="mb-5 flex items-center gap-3">
+        <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">{icon}</div>
+        <h3 className="font-black text-gray-950">{title}</h3>
+      </div>
+      {children}
+    </div>
   );
 }
 
-function getStatusLabel(status: ServiceStatus, isArabic: boolean) {
-  const option = statusOptions.find((item) => item.value === status);
-  return option ? (isArabic ? option.ar : option.en) : status;
+function TextField({ label, value, onChange, required }: { label: string; value: string; onChange: (value: string) => void; required?: boolean }) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-bold text-gray-700">{label}</label>
+      <input value={value} onChange={(e) => onChange(e.target.value)} required={required} className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+    </div>
+  );
+}
+
+function NumberField({ label, value, onChange, min, max }: { label: string; value: number; onChange: (value: number) => void; min?: number; max?: number }) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-bold text-gray-700">{label}</label>
+      <input type="number" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+    </div>
+  );
+}
+
+function SelectField({ label, value, onChange, options, required }: { label: string; value: string; onChange: (value: string) => void; options: Option[]; required?: boolean }) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-bold text-gray-700">{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)} required={required} className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100">
+        {options.map((item) => <option key={`${item.value}-${item.label}`} value={item.value}>{item.label}</option>)}
+      </select>
+    </div>
+  );
 }

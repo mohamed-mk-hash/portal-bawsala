@@ -1,11 +1,13 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
+  BriefcaseBusiness,
+  Building2,
+  ClipboardList,
   LayoutDashboard,
-  ReceiptText ,
-  Users,
   LogOut,
-  ClipboardList ,
+  ReceiptText,
+  Users,
 } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { useAuth } from '../auth/AuthContext';
@@ -15,34 +17,46 @@ export const Sidebar: React.FC = () => {
   const { logout } = useAuth();
 
   const menuItems = [
-    { path: '/', label: t.overview, icon: LayoutDashboard }, 
     {
-  path: '/account-requests',
-  label: isArabic ? 'طلبات الحسابات' : 'Account Requests',
-  icon: Users,
-},
-{
-  label: isArabic ? 'طلبات الخدمة' : 'Service Requests',
-  path: '/service-requests',
-  icon: ClipboardList,
-},
-{
-  label: isArabic ? 'الخدمات الحالية' : 'Current Services',
-  path: '/current-services',
-  icon: ClipboardList,
-},
-
-{
-  label: isArabic ? 'الفواتبر' : 'Bills',
-  path: '/invoices',
-  icon: ReceiptText,
-},
-
+      path: '/',
+      label: t.overview,
+      icon: LayoutDashboard,
+    },
+    {
+      path: '/account-requests',
+      label: isArabic ? 'طلبات الحسابات' : 'Account Requests',
+      icon: Users,
+    },
+    {
+      path: '/clients',
+      label: isArabic ? 'العملاء' : 'Clients',
+      icon: Building2,
+    },
+    {
+      path: '/deals',
+      label: isArabic ? 'الصفقات' : 'Deals',
+      icon: BriefcaseBusiness,
+    },
+    {
+      path: '/service-requests',
+      label: isArabic ? 'طلبات الخدمة' : 'Service Requests',
+      icon: ClipboardList,
+    },
+    {
+      path: '/current-services',
+      label: isArabic ? 'الخدمات المتوفرة' : 'Current Services',
+      icon: ClipboardList,
+    },
+    {
+      path: '/invoices',
+      label: isArabic ? 'الفواتير' : 'Bills',
+      icon: ReceiptText,
+    },
   ];
 
   return (
     <div
-      className={`w-64 bg-gray-900 text-white h-screen fixed top-0 ${
+      className={`w-64 bg-gray-900 text-white h-screen fixed top-0 z-40 ${
         isArabic ? 'right-0' : 'left-0'
       }`}
     >

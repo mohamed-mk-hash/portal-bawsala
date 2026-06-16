@@ -10,6 +10,8 @@ import { AccountRequests } from './pages/AccountRequests';
 import { ServiceRequests } from './pages/ServiceRequests';
 import { CurrentServices } from './pages/CurrentServices';
 import { Invoices } from './pages/Invoices';
+import { Clients } from './pages/Clients';
+import { Deals } from './pages/Deals';
 
 import { ClientLayout } from './client/ClientLayout';
 import { ClientOverview } from './client/ClientOverview';
@@ -78,79 +80,28 @@ const LoginRoute = () => {
   return <Login />;
 };
 
+const AdminPage = ({ children }: { children: React.ReactNode }) => {
+  return (
+    <ProtectedRoute allowedRole="admin">
+      <Layout>{children}</Layout>
+    </ProtectedRoute>
+  );
+};
+
 const AppRoutes = () => {
   return (
     <Routes>
       <Route path="/login" element={<LoginRoute />} />
 
-      {/* Admin routes */}
-      <Route
-        path="/"
-        element={
-          <ProtectedRoute allowedRole="admin">
-            <Layout>
-              <Overview />
-            </Layout>
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/" element={<AdminPage><Overview /></AdminPage>} />
+      <Route path="/home" element={<AdminPage><Home /></AdminPage>} />
+      <Route path="/account-requests" element={<AdminPage><AccountRequests /></AdminPage>} />
+      <Route path="/clients" element={<AdminPage><Clients /></AdminPage>} />
+      <Route path="/deals" element={<AdminPage><Deals /></AdminPage>} />
+      <Route path="/service-requests" element={<AdminPage><ServiceRequests /></AdminPage>} />
+      <Route path="/current-services" element={<AdminPage><CurrentServices /></AdminPage>} />
+      <Route path="/invoices" element={<AdminPage><Invoices /></AdminPage>} />
 
-      <Route
-        path="/home"
-        element={
-          <ProtectedRoute allowedRole="admin">
-            <Layout>
-              <Home />
-            </Layout>
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/account-requests"
-        element={
-          <ProtectedRoute allowedRole="admin">
-            <Layout>
-              <AccountRequests />
-            </Layout>
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-  path="/service-requests"
-  element={
-    <ProtectedRoute allowedRole="admin">
-      <Layout>
-        <ServiceRequests />
-      </Layout>
-    </ProtectedRoute>
-  }
-/>
-
-<Route
-  path="/invoices"
-  element={
-    <ProtectedRoute allowedRole="admin">
-      <Layout>
-        <Invoices />
-      </Layout>
-    </ProtectedRoute>
-  }
-/>
-
-<Route
-  path="/current-services"
-  element={
-    <ProtectedRoute allowedRole="admin">
-      <Layout>
-        <CurrentServices />
-      </Layout>
-    </ProtectedRoute>
-  }
-/>
-
-      {/* Client routes */}
       <Route
         path="/client"
         element={
@@ -159,8 +110,8 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       >
-         <Route path="request-service" element={<ClientRequestService />} />
         <Route index element={<ClientOverview />} />
+        <Route path="request-service" element={<ClientRequestService />} />
         <Route path="services" element={<ClientServices />} />
         <Route path="invoices" element={<ClientInvoices />} />
       </Route>

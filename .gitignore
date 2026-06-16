@@ -1,10 +1,7 @@
-# Env files
+node_modules/
+mailer-server/node_modules/
+dist/
 .env
-.env.local
-.env.*
-!.env.example
-
-# Firebase / Google secrets
+mailer-server/.env
 serviceAccountKey.json
-*.serviceAccountKey.json
 mailer-server/serviceAccountKey.json
