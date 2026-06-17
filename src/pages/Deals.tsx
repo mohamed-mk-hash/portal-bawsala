@@ -314,9 +314,6 @@ const getDealClientName = (deal: DealRecord) =>
 const getDealTitle = (deal: DealRecord) =>
   textOrDash(deal.dealTitle || deal.productService);
 
-const getDealEmail = (deal: DealRecord) =>
-  textOrDash(deal.clientEmail || deal.contactEmail);
-
 const getClientEmail = (client: ClientRecord) =>
   client.companyEmail || client.primaryContactEmail || '';
 

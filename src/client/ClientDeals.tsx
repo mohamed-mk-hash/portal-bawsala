@@ -14,7 +14,6 @@ import {
 import {
   BadgeCheck,
   BriefcaseBusiness,
-  ClipboardList,
   Eye,
   Search,
   X,
@@ -417,7 +416,6 @@ export const ClientDeals: React.FC = () => {
 
   const openCount = deals.filter((deal) => deal.dealStatus === 'Open').length;
   const wonCount = deals.filter((deal) => deal.dealStatus === 'Won').length;
-  const lostCount = deals.filter((deal) => deal.dealStatus === 'Lost').length;
   const pendingApprovalCount = deals.filter((deal) =>
     canClientApproveDeal(deal)
   ).length;
