@@ -2,15 +2,18 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   addDoc,
   collection,
+  doc,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   Timestamp,
+  updateDoc,
 } from 'firebase/firestore';
 import {
   BriefcaseBusiness,
   Eye,
+  Pencil,
   Plus,
   Search,
   Tag,
@@ -25,12 +28,19 @@ type ServiceForm = {
   name: string;
   domain: string;
   price: number;
+  currency: string;
+  basePriceDzd: number;
 };
 
-type AvailableService = Partial<ServiceForm> & {
+type AvailableService = {
   id: string;
-  recordType?: string;
+  type?: string;
+  name?: string;
+  domain?: string;
+  price?: number;
   currency?: string;
+  basePriceDzd?: number;
+  recordType?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };
@@ -65,11 +75,39 @@ const serviceDomains = [
   'الخدمات الإضافية',
 ];
 
+/**
+ * سعر 1 وحدة من العملة = كم DZD
+ * يمكنك تعديلها متى أردت
+ */
+const currencyRatesToDzd: Record<string, number> = {
+  DZD: 1,
+  USD: 135,
+  EUR: 146,
+  SAR: 36,
+  AED: 37,
+  KWD: 438,
+  TRY: 4.2,
+  CNY: 18.8,
+};
+
+const serviceCurrencies: Option[] = [
+  { value: 'DZD', label: 'DZD' },
+  { value: 'USD', label: 'USD' },
+  { value: 'EUR', label: 'EUR' },
+  { value: 'SAR', label: 'SAR' },
+  { value: 'AED', label: 'AED' },
+  { value: 'KWD', label: 'KWD' },
+  { value: 'TRY', label: 'TRY' },
+  { value: 'CNY', label: 'CNY' },
+];
+
 const emptyForm: ServiceForm = {
   type: serviceTypes[0],
   name: '',
   domain: serviceDomains[0],
   price: 0,
+  currency: 'DZD',
+  basePriceDzd: 0,
 };
 
 const ltrValueClass =
@@ -83,8 +121,24 @@ const textOrDash = (value: unknown) => {
 const makeOptions = (values: string[]): Option[] =>
   values.map((value) => ({ value, label: value || '-' }));
 
+const roundTo2 = (num: number) => Math.round((num + Number.EPSILON) * 100) / 100;
+
+const convertFromDzd = (amountDzd: number, targetCurrency: string) => {
+  const rate = currencyRatesToDzd[targetCurrency] || 1;
+  return roundTo2(Number(amountDzd || 0) / rate);
+};
+
+const convertToDzd = (amount: number, sourceCurrency: string) => {
+  const rate = currencyRatesToDzd[sourceCurrency] || 1;
+  return roundTo2(Number(amount || 0) * rate);
+};
+
 const formatMoney = (amount: number, currency = 'DZD') => {
-  return `${Number(amount || 0).toLocaleString()} ${currency}`;
+  const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
+  return `${safeAmount.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })} ${currency}`;
 };
 
 export const CurrentServices: React.FC = () => {
@@ -97,7 +151,8 @@ export const CurrentServices: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const [editingService, setEditingService] = useState<AvailableService | null>(null);
   const [selectedService, setSelectedService] = useState<AvailableService | null>(null);
 
   useEffect(() => {
@@ -117,8 +172,8 @@ export const CurrentServices: React.FC = () => {
         setServices(data);
         setLoading(false);
       },
-      (error) => {
-        console.error(error);
+      (err) => {
+        console.error(err);
         setLoading(false);
         setError(
           isArabic
@@ -136,7 +191,13 @@ export const CurrentServices: React.FC = () => {
     if (!text) return services;
 
     return services.filter((service) =>
-      [service.type, service.name, service.domain, service.price]
+      [
+        service.type,
+        service.name,
+        service.domain,
+        service.price,
+        service.currency,
+      ]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
@@ -144,10 +205,16 @@ export const CurrentServices: React.FC = () => {
     );
   }, [services, search]);
 
-  const totalValue = services.reduce(
-    (sum, service) => sum + Number(service.price || 0),
-    0
-  );
+  const totalsByCurrency = services.reduce<Record<string, number>>((totals, service) => {
+    const currency = (service.currency || 'DZD').toUpperCase();
+    totals[currency] = (totals[currency] || 0) + Number(service.price || 0);
+    return totals;
+  }, {});
+
+  const totalPricesLabel =
+    Object.entries(totalsByCurrency)
+      .map(([currency, amount]) => formatMoney(amount, currency))
+      .join(' / ') || formatMoney(0, 'DZD');
 
   const updateForm = <K extends keyof ServiceForm>(
     key: K,
@@ -156,19 +223,80 @@ export const CurrentServices: React.FC = () => {
     setForm((current) => ({ ...current, [key]: value }));
   };
 
+  /**
+   * عند كتابة السعر:
+   * نحفظ السعر كما هو في العملة الحالية،
+   * ثم نحسب قيمته المرجعية بالدينار DZD
+   */
+  const handlePriceChange = (value: number) => {
+    const safeValue = Number.isFinite(value) ? value : 0;
+    const newBasePriceDzd = convertToDzd(safeValue, form.currency);
+
+    setForm((current) => ({
+      ...current,
+      price: safeValue,
+      basePriceDzd: newBasePriceDzd,
+    }));
+  };
+
+  /**
+   * عند تغيير العملة:
+   * نحول مباشرة السعر من basePriceDzd إلى العملة الجديدة
+   */
+  const handleCurrencyChange = (newCurrency: string) => {
+    setForm((current) => {
+      const convertedPrice = convertFromDzd(current.basePriceDzd || 0, newCurrency);
+
+      return {
+        ...current,
+        currency: newCurrency,
+        price: convertedPrice,
+      };
+    });
+  };
+
   const openAddModal = () => {
     setMessage('');
     setError('');
+    setEditingService(null);
     setForm(emptyForm);
-    setIsAddModalOpen(true);
+    setIsFormModalOpen(true);
   };
 
-  const closeAddModal = () => {
+  const openEditModal = (service: AvailableService) => {
+    setMessage('');
+    setError('');
+    setSelectedService(null);
+    setEditingService(service);
+
+    const currentCurrency = service.currency || 'DZD';
+    const currentPrice = Number(service.price || 0);
+
+    const existingBasePriceDzd =
+      typeof service.basePriceDzd === 'number'
+        ? Number(service.basePriceDzd)
+        : convertToDzd(currentPrice, currentCurrency);
+
+    setForm({
+      type: service.type || serviceTypes[0],
+      name: service.name || '',
+      domain: service.domain || serviceDomains[0],
+      price: currentPrice,
+      currency: currentCurrency,
+      basePriceDzd: existingBasePriceDzd,
+    });
+
+    setIsFormModalOpen(true);
+  };
+
+  const closeFormModal = () => {
     if (saving) return;
-    setIsAddModalOpen(false);
+    setIsFormModalOpen(false);
+    setEditingService(null);
+    setForm(emptyForm);
   };
 
-  const createService = async (e: React.FormEvent) => {
+  const saveService = async (e: React.FormEvent) => {
     e.preventDefault();
 
     try {
@@ -191,23 +319,57 @@ export const CurrentServices: React.FC = () => {
         return;
       }
 
-      await addDoc(collection(db, 'availableServices'), {
+      if (!form.currency.trim()) {
+        setError(isArabic ? 'اختر العملة.' : 'Please choose the currency.');
+        return;
+      }
+
+      const payload = {
         recordType: 'availableService',
         type: form.type.trim(),
         name: form.name.trim(),
         domain: form.domain.trim(),
         price: Number(form.price || 0),
-        currency: 'DZD',
-        createdAt: serverTimestamp(),
+        currency: form.currency.trim().toUpperCase(),
+        basePriceDzd: Number(form.basePriceDzd || 0),
         updatedAt: serverTimestamp(),
-      });
+      };
 
-      setMessage(isArabic ? 'تمت إضافة الخدمة بنجاح.' : 'Service added successfully.');
+      if (editingService) {
+        await updateDoc(doc(db, 'availableServices', editingService.id), payload);
+
+        setMessage(
+          isArabic
+            ? 'تم تعديل الخدمة بنجاح.'
+            : 'Service updated successfully.'
+        );
+      } else {
+        await addDoc(collection(db, 'availableServices'), {
+          ...payload,
+          createdAt: serverTimestamp(),
+        });
+
+        setMessage(
+          isArabic
+            ? 'تمت إضافة الخدمة بنجاح.'
+            : 'Service added successfully.'
+        );
+      }
+
       setForm(emptyForm);
-      setIsAddModalOpen(false);
-    } catch (error) {
-      console.error(error);
-      setError(isArabic ? 'حدث خطأ أثناء إضافة الخدمة.' : 'Failed to add the service.');
+      setEditingService(null);
+      setIsFormModalOpen(false);
+    } catch (err) {
+      console.error(err);
+      setError(
+        editingService
+          ? isArabic
+            ? 'حدث خطأ أثناء تعديل الخدمة.'
+            : 'Failed to update the service.'
+          : isArabic
+            ? 'حدث خطأ أثناء إضافة الخدمة.'
+            : 'Failed to add the service.'
+      );
     } finally {
       setSaving(false);
     }
@@ -221,13 +383,15 @@ export const CurrentServices: React.FC = () => {
             <BriefcaseBusiness className="h-4 w-4" />
             {isArabic ? 'إدارة الخدمات' : 'Service Management'}
           </div>
+
           <h1 className="mt-4 text-3xl font-black text-gray-950">
             {isArabic ? 'الخدمات' : 'Services'}
           </h1>
+
           <p className="mt-2 text-gray-500">
             {isArabic
-              ? 'أضف الخدمات المتوفرة في شركة بوصلة حتى يتم اختيارها لاحقاً عند إنشاء صفقة.'
-              : 'Add Bawsala services here so they can be selected later when creating deals.'}
+              ? 'أضف وعدّل الخدمات المتوفرة مع تحديد العملة وتحويل السعر تلقائيًا.'
+              : 'Add and edit services with currency support and automatic price conversion.'}
           </p>
         </div>
 
@@ -241,14 +405,35 @@ export const CurrentServices: React.FC = () => {
         </button>
       </div>
 
-      {message && <Feedback tone="blue" message={message} onClose={() => setMessage('')} />}
-      {error && <Feedback tone="red" message={error} onClose={() => setError('')} />}
+      {message && (
+        <Feedback tone="blue" message={message} onClose={() => setMessage('')} />
+      )}
+
+      {error && (
+        <Feedback tone="red" message={error} onClose={() => setError('')} />
+      )}
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-4">
-        <StatCard label={isArabic ? 'إجمالي الخدمات' : 'Total Services'} value={services.length.toString()} />
-        <StatCard label={isArabic ? 'أنواع الخدمات' : 'Service Types'} value={new Set(services.map((item) => item.type).filter(Boolean)).size.toString()} />
-        <StatCard label={isArabic ? 'المجالات' : 'Domains'} value={new Set(services.map((item) => item.domain).filter(Boolean)).size.toString()} />
-        <StatCard label={isArabic ? 'إجمالي الأسعار' : 'Total Prices'} value={formatMoney(totalValue)} ltr />
+        <StatCard
+          label={isArabic ? 'إجمالي الخدمات' : 'Total Services'}
+          value={services.length.toString()}
+        />
+
+        <StatCard
+          label={isArabic ? 'أنواع الخدمات' : 'Service Types'}
+          value={new Set(services.map((item) => item.type).filter(Boolean)).size.toString()}
+        />
+
+        <StatCard
+          label={isArabic ? 'المجالات' : 'Domains'}
+          value={new Set(services.map((item) => item.domain).filter(Boolean)).size.toString()}
+        />
+
+        <StatCard
+          label={isArabic ? 'إجمالي الأسعار حسب العملة' : 'Total Prices by Currency'}
+          value={totalPricesLabel}
+          ltr
+        />
       </div>
 
       <Card>
@@ -257,20 +442,28 @@ export const CurrentServices: React.FC = () => {
             <h2 className="text-xl font-black text-gray-950">
               {isArabic ? 'جدول الخدمات' : 'Service Table'}
             </h2>
+
             <p className="mt-1 text-sm text-gray-500">
               {isArabic
-                ? 'قائمة مختصرة للخدمات المتوفرة مع إمكانية فتح التفاصيل.'
-                : 'A compact list of available services with details popup.'}
+                ? 'قائمة مختصرة للخدمات المتوفرة مع إمكانية فتح التفاصيل أو التعديل.'
+                : 'A compact list of available services with details and edit actions.'}
             </p>
           </div>
 
           <div className="relative w-full lg:w-96">
-            <Search className={`absolute top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 ${isArabic ? 'right-4' : 'left-4'}`} />
+            <Search
+              className={`absolute top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 ${
+                isArabic ? 'right-4' : 'left-4'
+              }`}
+            />
+
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={isArabic ? 'بحث عن خدمة...' : 'Search service...'}
-              className={`w-full rounded-2xl border border-gray-200 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${isArabic ? 'pr-11 pl-4' : 'pl-11 pr-4'}`}
+              className={`w-full rounded-2xl border border-gray-200 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
+                isArabic ? 'pr-11 pl-4' : 'pl-11 pr-4'
+              }`}
             />
           </div>
         </div>
@@ -284,11 +477,15 @@ export const CurrentServices: React.FC = () => {
         {!loading && filteredServices.length === 0 && (
           <div className="rounded-3xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center">
             <BriefcaseBusiness className="mx-auto h-12 w-12 text-gray-300" />
+
             <h3 className="mt-4 text-lg font-black text-gray-700">
               {isArabic ? 'لا توجد خدمات بعد' : 'No services yet'}
             </h3>
+
             <p className="mt-2 text-sm text-gray-500">
-              {isArabic ? 'اضغط إضافة خدمة لإضافة أول خدمة.' : 'Click Add Service to add the first service.'}
+              {isArabic
+                ? 'اضغط إضافة خدمة لإضافة أول خدمة.'
+                : 'Click Add Service to add the first service.'}
             </p>
           </div>
         )}
@@ -296,14 +493,15 @@ export const CurrentServices: React.FC = () => {
         {!loading && filteredServices.length > 0 && (
           <div className="overflow-hidden rounded-3xl border border-gray-100">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[850px] text-sm">
+              <table className="w-full min-w-[980px] text-sm">
                 <thead className="bg-slate-950 text-white">
                   <tr>
                     <TableHead label={isArabic ? 'النوع' : 'Type'} />
                     <TableHead label={isArabic ? 'الإسم' : 'Name'} />
                     <TableHead label={isArabic ? 'المجال' : 'Domain'} />
                     <TableHead label={isArabic ? 'السعر' : 'Price'} />
-                    <TableHead label={isArabic ? 'التفاصيل' : 'Details'} />
+                    <TableHead label={isArabic ? 'العملة' : 'Currency'} />
+                    <TableHead label={isArabic ? 'الإجراءات' : 'Actions'} />
                   </tr>
                 </thead>
 
@@ -313,16 +511,35 @@ export const CurrentServices: React.FC = () => {
                       <TableCell strong value={textOrDash(service.type)} />
                       <TableCell value={textOrDash(service.name)} />
                       <TableCell value={textOrDash(service.domain)} />
-                      <TableCell ltr value={formatMoney(Number(service.price || 0), service.currency || 'DZD')} />
+                      <TableCell
+  ltr
+  value={Number(service.price || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })}
+/>
+                      <TableCell ltr value={textOrDash(service.currency || 'DZD')} />
+
                       <td className="whitespace-nowrap px-5 py-4">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedService(service)}
-                          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700"
-                        >
-                          <Eye className="h-4 w-4" />
-                          {isArabic ? 'التفاصيل' : 'Details'}
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedService(service)}
+                            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white hover:bg-blue-700"
+                          >
+                            <Eye className="h-4 w-4" />
+                            {isArabic ? 'التفاصيل' : 'Details'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(service)}
+                            className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-xs font-black text-white hover:bg-amber-600"
+                          >
+                            <Pencil className="h-4 w-4" />
+                            {isArabic ? 'تعديل' : 'Edit'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -333,14 +550,17 @@ export const CurrentServices: React.FC = () => {
         )}
       </Card>
 
-      {isAddModalOpen && (
-        <AddServiceModal
+      {isFormModalOpen && (
+        <ServiceFormModal
           isArabic={isArabic}
           form={form}
           saving={saving}
-          onClose={closeAddModal}
-          onSubmit={createService}
+          isEditing={Boolean(editingService)}
+          onClose={closeFormModal}
+          onSubmit={saveService}
           updateForm={updateForm}
+          onPriceChange={handlePriceChange}
+          onCurrencyChange={handleCurrencyChange}
         />
       )}
 
@@ -349,26 +569,33 @@ export const CurrentServices: React.FC = () => {
           service={selectedService}
           isArabic={isArabic}
           onClose={() => setSelectedService(null)}
+          onEdit={() => openEditModal(selectedService)}
         />
       )}
     </div>
   );
 };
 
-function AddServiceModal({
+function ServiceFormModal({
   isArabic,
   form,
   saving,
+  isEditing,
   onClose,
   onSubmit,
   updateForm,
+  onPriceChange,
+  onCurrencyChange,
 }: {
   isArabic: boolean;
   form: ServiceForm;
   saving: boolean;
+  isEditing: boolean;
   onClose: () => void;
   onSubmit: (e: React.FormEvent) => void;
   updateForm: <K extends keyof ServiceForm>(key: K, value: ServiceForm[K]) => void;
+  onPriceChange: (value: number) => void;
+  onCurrencyChange: (currency: string) => void;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
@@ -379,30 +606,43 @@ function AddServiceModal({
         <div className="flex flex-none items-start justify-between gap-4 border-b border-gray-100 px-6 py-5">
           <div className="flex items-start gap-3">
             <div className="rounded-2xl bg-blue-100 p-3 text-blue-600">
-              <Plus className="h-6 w-6" />
+              {isEditing ? <Pencil className="h-6 w-6" /> : <Plus className="h-6 w-6" />}
             </div>
+
             <div>
               <h2 className="text-xl font-black text-gray-950">
-                {isArabic ? 'إضافة خدمة جديدة' : 'Add New Service'}
+                {isEditing
+                  ? isArabic
+                    ? 'تعديل الخدمة'
+                    : 'Edit Service'
+                  : isArabic
+                    ? 'إضافة خدمة جديدة'
+                    : 'Add New Service'}
               </h2>
+
               <p className="mt-1 text-sm text-gray-500">
                 {isArabic
-                  ? 'أدخل بيانات الخدمة المتوفرة داخل شركة بوصلة.'
-                  : 'Enter the available service information.'}
+                  ? 'أدخل بيانات الخدمة وحدد العملة، وسيتم تحويل السعر تلقائيًا.'
+                  : 'Enter the service data and choose currency, the price will be converted automatically.'}
               </p>
             </div>
           </div>
+
           <button
             type="button"
             onClick={onClose}
-            className="rounded-2xl bg-gray-100 p-3 text-gray-500 hover:bg-gray-200"
+            disabled={saving}
+            className="rounded-2xl bg-gray-100 p-3 text-gray-500 hover:bg-gray-200 disabled:opacity-50"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6">
-          <FormSection title={isArabic ? 'بيانات الخدمة' : 'Service Information'} icon={<Tag className="h-5 w-5" />}>
+          <FormSection
+            title={isArabic ? 'بيانات الخدمة' : 'Service Information'}
+            icon={<Tag className="h-5 w-5" />}
+          >
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <SelectField
                 label={isArabic ? 'النوع' : 'Type'}
@@ -411,12 +651,14 @@ function AddServiceModal({
                 options={makeOptions(serviceTypes)}
                 required
               />
+
               <TextField
                 label={isArabic ? 'الإسم' : 'Name'}
                 value={form.name}
                 onChange={(value) => updateForm('name', value)}
                 required
               />
+
               <SelectField
                 label={isArabic ? 'المجال' : 'Domain'}
                 value={form.domain}
@@ -424,12 +666,28 @@ function AddServiceModal({
                 options={makeOptions(serviceDomains)}
                 required
               />
+
               <NumberField
                 label={isArabic ? 'السعر' : 'Price'}
                 value={form.price}
-                onChange={(value) => updateForm('price', value)}
+                onChange={onPriceChange}
                 min={0}
+                step="0.01"
               />
+
+              <SelectField
+                label={isArabic ? 'العملة' : 'Currency'}
+                value={form.currency}
+                onChange={onCurrencyChange}
+                options={serviceCurrencies}
+                required
+              />
+            </div>
+
+            <div className="mt-4 rounded-2xl bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">
+              {isArabic
+                ? `السعر المرجعي: ${formatMoney(form.basePriceDzd, 'DZD')}`
+                : `Reference price: ${formatMoney(form.basePriceDzd, 'DZD')}`}
             </div>
           </FormSection>
         </div>
@@ -443,6 +701,7 @@ function AddServiceModal({
           >
             {isArabic ? 'إلغاء' : 'Cancel'}
           </button>
+
           <button
             disabled={saving}
             className="flex-1 rounded-2xl bg-blue-600 px-5 py-3 font-bold text-white hover:bg-blue-700 disabled:opacity-50"
@@ -451,9 +710,13 @@ function AddServiceModal({
               ? isArabic
                 ? 'جاري الحفظ...'
                 : 'Saving...'
-              : isArabic
-                ? 'حفظ الخدمة'
-                : 'Save Service'}
+              : isEditing
+                ? isArabic
+                  ? 'حفظ التعديل'
+                  : 'Save Changes'
+                : isArabic
+                  ? 'حفظ الخدمة'
+                  : 'Save Service'}
           </button>
         </div>
       </form>
@@ -465,66 +728,130 @@ function ServiceDetailsModal({
   service,
   isArabic,
   onClose,
+  onEdit,
 }: {
   service: AvailableService;
   isArabic: boolean;
   onClose: () => void;
+  onEdit: () => void;
 }) {
   const details: DetailItem[] = [
     [isArabic ? 'النوع' : 'Type', service.type],
     [isArabic ? 'الإسم' : 'Name', service.name],
     [isArabic ? 'المجال' : 'Domain', service.domain],
-    [isArabic ? 'السعر' : 'Price', formatMoney(Number(service.price || 0), service.currency || 'DZD'), true],
+    [
+      isArabic ? 'السعر' : 'Price',
+      formatMoney(Number(service.price || 0), service.currency || 'DZD'),
+      true,
+    ],
+    [isArabic ? 'العملة' : 'Currency', service.currency || 'DZD', true],
+    [
+      isArabic ? 'السعر المرجعي' : 'Reference Price',
+      formatMoney(Number(service.basePriceDzd || 0), 'DZD'),
+      true,
+    ],
   ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
-      <div dir={isArabic ? 'rtl' : 'ltr'} className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+      <div
+        dir={isArabic ? 'rtl' : 'ltr'}
+        className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl bg-white shadow-2xl"
+      >
         <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-6 py-5">
           <div>
             <p className="text-sm font-bold text-blue-600">
               {isArabic ? 'تفاصيل الخدمة' : 'Service Details'}
             </p>
+
             <h2 className="mt-1 text-2xl font-black text-gray-950">
               {textOrDash(service.name)}
             </h2>
+
             <p className="mt-1 text-sm text-gray-500">
               {textOrDash(service.domain)}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-2xl bg-gray-100 p-3 text-gray-500 hover:bg-gray-200"
-          >
-            <X className="h-5 w-5" />
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onEdit}
+              className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-black text-white hover:bg-amber-600"
+            >
+              <Pencil className="h-4 w-4" />
+              {isArabic ? 'تعديل' : 'Edit'}
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-2xl bg-gray-100 p-3 text-gray-500 hover:bg-gray-200"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
+
         <div className="max-h-[calc(92vh-112px)] overflow-y-auto p-6">
-          <DetailsSection title={isArabic ? 'بيانات الخدمة' : 'Service Information'} items={details} />
+          <DetailsSection
+            title={isArabic ? 'بيانات الخدمة' : 'Service Information'}
+            items={details}
+          />
         </div>
       </div>
     </div>
   );
 }
 
-function Feedback({ tone, message, onClose }: { tone: 'blue' | 'red'; message: string; onClose?: () => void }) {
-  const styles = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : 'border-blue-200 bg-blue-50 text-blue-700';
+function Feedback({
+  tone,
+  message,
+  onClose,
+}: {
+  tone: 'blue' | 'red';
+  message: string;
+  onClose?: () => void;
+}) {
+  const styles =
+    tone === 'red'
+      ? 'border-red-200 bg-red-50 text-red-700'
+      : 'border-blue-200 bg-blue-50 text-blue-700';
+
   return (
     <div className={`rounded-2xl border px-5 py-4 font-medium ${styles}`}>
       <div className="flex items-start justify-between gap-4">
         <p>{message}</p>
-        {onClose && <button type="button" onClick={onClose} className="font-bold opacity-70 hover:opacity-100">×</button>}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="font-bold opacity-70 hover:opacity-100"
+          >
+            ×
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value, ltr }: { label: string; value: string; ltr?: boolean }) {
+function StatCard({
+  label,
+  value,
+  ltr,
+}: {
+  label: string;
+  value: string;
+  ltr?: boolean;
+}) {
   return (
     <Card>
       <p className="text-sm font-bold text-gray-500">{label}</p>
-      <p dir={ltr ? 'ltr' : undefined} className={`mt-2 text-2xl font-black text-gray-950 ${ltr ? ltrValueClass : ''}`}>
+      <p
+        dir={ltr ? 'ltr' : undefined}
+        className={`mt-2 text-2xl font-black text-gray-950 ${ltr ? ltrValueClass : ''}`}
+      >
         {value}
       </p>
     </Card>
@@ -532,18 +859,46 @@ function StatCard({ label, value, ltr }: { label: string; value: string; ltr?: b
 }
 
 function TableHead({ label }: { label: string }) {
-  return <th className="whitespace-nowrap px-5 py-4 text-start text-xs font-black uppercase tracking-wide">{label}</th>;
+  return (
+    <th className="whitespace-nowrap px-5 py-4 text-start text-xs font-black uppercase tracking-wide">
+      {label}
+    </th>
+  );
 }
 
-function TableCell({ value, strong, ltr }: { value: string; strong?: boolean; ltr?: boolean }) {
+function TableCell({
+  value,
+  strong,
+  ltr,
+}: {
+  value: string;
+  strong?: boolean;
+  ltr?: boolean;
+}) {
   return (
-    <td className={`max-w-[300px] whitespace-nowrap px-5 py-4 ${strong ? 'font-black text-gray-950' : 'font-medium text-gray-700'}`} title={value}>
-      <span dir={ltr ? 'ltr' : undefined} className={`block overflow-hidden text-ellipsis ${ltr ? ltrValueClass : ''}`}>{value}</span>
+    <td
+      className={`max-w-[300px] whitespace-nowrap px-5 py-4 ${
+        strong ? 'font-black text-gray-950' : 'font-medium text-gray-700'
+      }`}
+      title={value}
+    >
+      <span
+        dir={ltr ? 'ltr' : undefined}
+        className={`block overflow-hidden text-ellipsis ${ltr ? ltrValueClass : ''}`}
+      >
+        {value}
+      </span>
     </td>
   );
 }
 
-function DetailsSection({ title, items }: { title: string; items: DetailItem[] }) {
+function DetailsSection({
+  title,
+  items,
+}: {
+  title: string;
+  items: DetailItem[];
+}) {
   return (
     <div className="rounded-3xl border border-gray-100 p-5">
       <h3 className="mb-4 font-black text-gray-950">{title}</h3>
@@ -551,7 +906,12 @@ function DetailsSection({ title, items }: { title: string; items: DetailItem[] }
         {items.map(([label, value, ltr]) => (
           <div key={label} className="rounded-2xl bg-gray-50 p-4">
             <p className="text-xs font-bold text-gray-400">{label}</p>
-            <p dir={ltr ? 'ltr' : undefined} className={`mt-1 break-words font-bold text-gray-900 ${ltr ? ltrValueClass : ''}`}>{textOrDash(value)}</p>
+            <p
+              dir={ltr ? 'ltr' : undefined}
+              className={`mt-1 break-words font-bold text-gray-900 ${ltr ? ltrValueClass : ''}`}
+            >
+              {textOrDash(value)}
+            </p>
           </div>
         ))}
       </div>
@@ -559,7 +919,15 @@ function DetailsSection({ title, items }: { title: string; items: DetailItem[] }
   );
 }
 
-function FormSection({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function FormSection({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="rounded-3xl border border-gray-100 p-5">
       <div className="mb-5 flex items-center gap-3">
@@ -571,30 +939,88 @@ function FormSection({ title, icon, children }: { title: string; icon: React.Rea
   );
 }
 
-function TextField({ label, value, onChange, required }: { label: string; value: string; onChange: (value: string) => void; required?: boolean }) {
+function TextField({
+  label,
+  value,
+  onChange,
+  required,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}) {
   return (
     <div>
       <label className="mb-2 block text-sm font-bold text-gray-700">{label}</label>
-      <input value={value} onChange={(e) => onChange(e.target.value)} required={required} className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        required={required}
+        className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+      />
     </div>
   );
 }
 
-function NumberField({ label, value, onChange, min, max }: { label: string; value: number; onChange: (value: number) => void; min?: number; max?: number }) {
+function NumberField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+  max?: number;
+  step?: string;
+}) {
   return (
     <div>
       <label className="mb-2 block text-sm font-bold text-gray-700">{label}</label>
-      <input type="number" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+      />
     </div>
   );
 }
 
-function SelectField({ label, value, onChange, options, required }: { label: string; value: string; onChange: (value: string) => void; options: Option[]; required?: boolean }) {
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+  required,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Option[];
+  required?: boolean;
+}) {
   return (
     <div>
       <label className="mb-2 block text-sm font-bold text-gray-700">{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)} required={required} className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100">
-        {options.map((item) => <option key={`${item.value}-${item.label}`} value={item.value}>{item.label}</option>)}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        required={required}
+        className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+      >
+        {options.map((item) => (
+          <option key={`${item.value}-${item.label}`} value={item.value}>
+            {item.label}
+          </option>
+        ))}
       </select>
     </div>
   );

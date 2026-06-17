@@ -47,9 +47,9 @@ export const ClientSidebar: React.FC = () => {
           {isArabic ? 'طلب خدمة' : 'Request Service'}
         </NavLink>
 
-        <NavLink to="/client/services" className={linkClass}>
+        <NavLink to="/client/deals" className={linkClass}>
           <FileText className="w-5 h-5" />
-          {isArabic ? 'خدماتي' : 'My Services'}
+          {isArabic ? 'صفقاتي' : 'My Deals'}
         </NavLink>
 
         <NavLink to="/client/invoices" className={linkClass}>

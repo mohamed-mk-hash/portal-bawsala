@@ -18,6 +18,7 @@ import { ClientOverview } from './client/ClientOverview';
 import { ClientServices } from './client/ClientServices';
 import { ClientInvoices } from './client/ClientInvoices';
 import { ClientRequestService } from './client/ClientRequestService';
+import { ClientDeals } from './client/ClientDeals';
 
 type ProtectedRouteProps = {
   allowedRole: 'admin' | 'client';
@@ -114,6 +115,7 @@ const AppRoutes = () => {
         <Route path="request-service" element={<ClientRequestService />} />
         <Route path="services" element={<ClientServices />} />
         <Route path="invoices" element={<ClientInvoices />} />
+        <Route path="/client/deals" element={<ClientDeals />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/login" replace />} />
