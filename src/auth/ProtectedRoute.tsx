@@ -2,12 +2,20 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 
-type Role = 'admin' | 'client';
+type AdminRole = 'admin' | 'super_admin' | 'department_head' | 'owner';
+type Role = AdminRole | 'client';
 
 type ProtectedRouteProps = {
   allowedRoles: Role[];
   children: React.ReactNode;
 };
+
+const adminRoles: AdminRole[] = [
+  'admin',
+  'super_admin',
+  'department_head',
+  'owner',
+];
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   allowedRoles,
@@ -27,8 +35,10 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     return <Navigate to="/login" replace />;
   }
 
-  if (!allowedRoles.includes(role)) {
-    if (role === 'admin') {
+  if (!allowedRoles.includes(role as Role)) {
+    const isAdminUser = adminRoles.includes(role as AdminRole);
+
+    if (isAdminUser) {
       return <Navigate to="/" replace />;
     }
 
