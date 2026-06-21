@@ -8,51 +8,93 @@ import {
   LogOut,
   ReceiptText,
   Users,
+  CheckSquare,
+  Columns3,
 } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { useAuth } from '../auth/AuthContext';
 
 export const Sidebar: React.FC = () => {
   const { t, isArabic } = useLanguage();
-  const { logout } = useAuth();
+  const { logout, profile } = useAuth();
+
+const role = profile?.role;
 
   const menuItems = [
-    {
-      path: '/',
-      label: t.overview,
-      icon: LayoutDashboard,
-    },
-    {
-      path: '/account-requests',
-      label: isArabic ? 'طلبات الحسابات' : 'Account Requests',
-      icon: Users,
-    },
-    {
-      path: '/clients',
-      label: isArabic ? 'العملاء' : 'Clients',
-      icon: Building2,
-    },
-    {
-      path: '/deals',
-      label: isArabic ? 'الصفقات' : 'Deals',
-      icon: BriefcaseBusiness,
-    },
-    {
-      path: '/service-requests',
-      label: isArabic ? 'طلبات الخدمة' : 'Service Requests',
-      icon: ClipboardList,
-    },
-    {
-      path: '/current-services',
-      label: isArabic ? 'الخدمات المتوفرة' : 'Current Services',
-      icon: ClipboardList,
-    },
-    {
-      path: '/invoices',
-      label: isArabic ? 'الفواتير' : 'Bills',
-      icon: ReceiptText,
-    },
-  ];
+  {
+    path: '/',
+    label: isArabic ? 'لوحة القيادة' : 'Overview',
+    icon: LayoutDashboard,
+    roles: ['admin', 'super_admin', 'department_head', 'owner'],
+  },
+
+  {
+    path: '/account-requests',
+    label: isArabic ? 'طلبات الحسابات' : 'Account Requests',
+    icon: Users,
+    roles: ['admin', 'super_admin'],
+  },
+
+  {
+    path: '/clients',
+    label: isArabic ? 'العملاء' : 'Clients',
+    icon: Building2,
+    roles: ['admin', 'super_admin'],
+  },
+
+  {
+    path: '/deals',
+    label: isArabic ? 'الصفقات' : 'Deals',
+    icon: BriefcaseBusiness,
+    roles: ['admin', 'super_admin', 'department_head'],
+  },
+
+  {
+    path: '/deals-kanban',
+    label: isArabic ? 'كانبان الصفقات' : 'Deals Kanban',
+    icon: Columns3,
+    roles: ['admin', 'super_admin', 'department_head', 'owner'],
+  },
+
+  {
+    path: '/service-requests',
+    label: isArabic ? 'طلبات الخدمة' : 'Service Requests',
+    icon: ClipboardList,
+    roles: ['admin', 'super_admin', 'department_head'],
+  },
+
+  {
+    path: '/current-services',
+    label: isArabic ? 'كتالوج الخدمات' : 'Service Catalog',
+    icon: ClipboardList,
+    roles: ['admin', 'super_admin'],
+  },
+
+  {
+    path: '/active-services',
+    label: isArabic ? 'الخدمات الجارية' : 'Active Services',
+    icon: ClipboardList,
+    roles: ['admin', 'super_admin', 'department_head', 'owner'],
+  },
+
+  {
+    path: '/activities',
+    label: isArabic ? 'المهام' : 'Activities',
+    icon: CheckSquare,
+    roles: ['admin', 'super_admin', 'department_head', 'owner'],
+  },
+
+  {
+    path: '/invoices',
+    label: isArabic ? 'الفواتير' : 'Invoices',
+    icon: ReceiptText,
+    roles: ['admin', 'super_admin'],
+  },
+];
+
+const visibleMenuItems = menuItems.filter((item) =>
+  item.roles.includes(role || '')
+);
 
   return (
     <div
@@ -65,7 +107,7 @@ export const Sidebar: React.FC = () => {
       </div>
 
       <nav className="mt-6">
-        {menuItems.map((item) => (
+        {visibleMenuItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}

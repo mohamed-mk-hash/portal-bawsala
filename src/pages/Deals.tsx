@@ -89,6 +89,12 @@ type DealRecord = Partial<DealForm> & {
   contactPhone?: string;
   clientApprovalRequired?: boolean;
   clientApprovalStatus?: ClientApprovalStatus;
+  approvalActivityCreated?: boolean;
+  approvalActivityCreatedAt?: Timestamp;
+  feedbackActivityCreated?: boolean;
+  feedbackActivityCreatedAt?: Timestamp;
+  ownerUid?: string;
+  ownerEmail?: string;
   clientApprovedAt?: Timestamp;
   clientApprovedBy?: string;
   clientRejectedAt?: Timestamp;
@@ -757,6 +763,13 @@ export const Deals: React.FC = () => {
         dealStatus: 'Open',
         clientApprovalRequired: true,
         clientApprovalStatus: 'pending' as ClientApprovalStatus,
+
+        // These flags keep Activities/Kanban clean.
+        // The first activity is created only after the client accepts the deal.
+        approvalActivityCreated: false,
+        feedbackActivityCreated: false,
+        ownerUid: '',
+        ownerEmail: '',
 
         budgetRange: form.budgetRange.trim(),
         activitySubject: form.activitySubject.trim(),

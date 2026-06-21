@@ -13,7 +13,8 @@ import {
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 
-type UserRole = 'admin' | 'client';
+export type AdminRole = 'admin' | 'super_admin' | 'department_head' | 'owner';
+export type UserRole = AdminRole | 'client';
 
 type UserProfile = {
   uid: string;
@@ -21,9 +22,13 @@ type UserProfile = {
   fullName: string;
   role: UserRole;
   status: 'active' | 'disabled';
+
   companyName?: string;
   phone?: string;
   mustChangePassword?: boolean;
+
+  department?: string;
+  ownerName?: string;
 };
 
 interface AuthContextType {
@@ -39,6 +44,14 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const validRoles: UserRole[] = [
+  'admin',
+  'super_admin',
+  'department_head',
+  'owner',
+  'client',
+];
+
 async function getUserProfile(uid: string): Promise<UserProfile> {
   const userRef = doc(db, 'users', uid);
   const userSnap = await getDoc(userRef);
@@ -53,11 +66,14 @@ async function getUserProfile(uid: string): Promise<UserProfile> {
     throw new Error('USER_NOT_ACTIVE');
   }
 
-  if (data.role !== 'admin' && data.role !== 'client') {
+  if (!validRoles.includes(data.role)) {
     throw new Error('INVALID_ROLE');
   }
 
-  return data;
+  return {
+    ...data,
+    uid: data.uid || uid,
+  };
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -118,15 +134,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const updateProfile = (updates: Partial<UserProfile>) => {
-  setProfile((currentProfile) => {
-    if (!currentProfile) return currentProfile;
+    setProfile((currentProfile) => {
+      if (!currentProfile) return currentProfile;
 
-    return {
-      ...currentProfile,
-      ...updates,
-    };
-  });
-};
+      return {
+        ...currentProfile,
+        ...updates,
+      };
+    });
+  };
 
   return (
     <AuthContext.Provider

@@ -5,7 +5,6 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import { Layout } from './components/Layout';
 import { Home } from './pages/Home';
 import { Login } from './pages/Login';
-import { Overview } from './pages/Overview';
 import { AccountRequests } from './pages/AccountRequests';
 import { ServiceRequests } from './pages/ServiceRequests';
 import { CurrentServices } from './pages/CurrentServices';
@@ -20,28 +19,73 @@ import { ClientInvoices } from './client/ClientInvoices';
 import { ClientRequestService } from './client/ClientRequestService';
 import { ClientDeals } from './client/ClientDeals';
 
+import { AdminOverview } from './pages/AdminOverview';
+import { Activities } from './pages/Activities';
+import { ActiveServices } from './pages/ActiveServices';
+import { DealsKanban } from './pages/DealsKanban';
+
+type AdminRole = 'admin' | 'super_admin' | 'department_head' | 'owner';
+type AppRole = AdminRole | 'client';
+
+const adminRoles: AdminRole[] = [
+  'admin',
+  'super_admin',
+  'department_head',
+  'owner',
+];
+
+const allAdminRoles: AdminRole[] = [
+  'admin',
+  'super_admin',
+  'department_head',
+  'owner',
+];
+
+const superAdminOnly: AdminRole[] = [
+  'admin',
+  'super_admin',
+];
+
+const departmentManagementRoles: AdminRole[] = [
+  'admin',
+  'super_admin',
+  'department_head',
+];
+
+const operationalRoles: AdminRole[] = [
+  'admin',
+  'super_admin',
+  'department_head',
+  'owner',
+];
+
 type ProtectedRouteProps = {
-  allowedRole: 'admin' | 'client';
+  allowedRoles: AppRole[];
   children: React.ReactNode;
 };
 
-const ProtectedRoute = ({ allowedRole, children }: ProtectedRouteProps) => {
+const LoadingScreen = () => (
+  <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+    <p className="text-gray-500">جاري التحميل...</p>
+  </div>
+);
+
+const ProtectedRoute = ({ allowedRoles, children }: ProtectedRouteProps) => {
   const { isAuthenticated, role, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <p className="text-gray-500">جاري التحميل...</p>
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 
-  if (role !== allowedRole) {
-    if (role === 'admin') {
+  if (!role || !allowedRoles.includes(role as AppRole)) {
+    const isAdminUser =
+      role !== null && adminRoles.includes(role as AdminRole);
+
+    if (isAdminUser) {
       return <Navigate to="/" replace />;
     }
 
@@ -59,18 +103,17 @@ const LoginRoute = () => {
   const { isAuthenticated, role, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <p className="text-gray-500">جاري التحميل...</p>
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (!isAuthenticated) {
     return <Login />;
   }
 
-  if (role === 'admin') {
+  const isAdminUser =
+    role !== null && adminRoles.includes(role as AdminRole);
+
+  if (isAdminUser) {
     return <Navigate to="/" replace />;
   }
 
@@ -81,10 +124,24 @@ const LoginRoute = () => {
   return <Login />;
 };
 
-const AdminPage = ({ children }: { children: React.ReactNode }) => {
+const AdminPage = ({
+  allowedRoles,
+  children,
+}: {
+  allowedRoles: AdminRole[];
+  children: React.ReactNode;
+}) => {
   return (
-    <ProtectedRoute allowedRole="admin">
+    <ProtectedRoute allowedRoles={allowedRoles}>
       <Layout>{children}</Layout>
+    </ProtectedRoute>
+  );
+};
+
+const ClientPage = ({ children }: { children: React.ReactNode }) => {
+  return (
+    <ProtectedRoute allowedRoles={['client']}>
+      {children}
     </ProtectedRoute>
   );
 };
@@ -94,28 +151,127 @@ const AppRoutes = () => {
     <Routes>
       <Route path="/login" element={<LoginRoute />} />
 
-      <Route path="/" element={<AdminPage><Overview /></AdminPage>} />
-      <Route path="/home" element={<AdminPage><Home /></AdminPage>} />
-      <Route path="/account-requests" element={<AdminPage><AccountRequests /></AdminPage>} />
-      <Route path="/clients" element={<AdminPage><Clients /></AdminPage>} />
-      <Route path="/deals" element={<AdminPage><Deals /></AdminPage>} />
-      <Route path="/service-requests" element={<AdminPage><ServiceRequests /></AdminPage>} />
-      <Route path="/current-services" element={<AdminPage><CurrentServices /></AdminPage>} />
-      <Route path="/invoices" element={<AdminPage><Invoices /></AdminPage>} />
+      <Route
+        path="/"
+        element={
+          <AdminPage allowedRoles={allAdminRoles}>
+            <AdminOverview />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/overview"
+        element={
+          <AdminPage allowedRoles={allAdminRoles}>
+            <AdminOverview />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/home"
+        element={
+          <AdminPage allowedRoles={superAdminOnly}>
+            <Home />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/account-requests"
+        element={
+          <AdminPage allowedRoles={superAdminOnly}>
+            <AccountRequests />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/clients"
+        element={
+          <AdminPage allowedRoles={superAdminOnly}>
+            <Clients />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/deals"
+        element={
+          <AdminPage allowedRoles={departmentManagementRoles}>
+            <Deals />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/deals-kanban"
+        element={
+          <AdminPage allowedRoles={operationalRoles}>
+            <DealsKanban />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/service-requests"
+        element={
+          <AdminPage allowedRoles={departmentManagementRoles}>
+            <ServiceRequests />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/current-services"
+        element={
+          <AdminPage allowedRoles={superAdminOnly}>
+            <CurrentServices />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/active-services"
+        element={
+          <AdminPage allowedRoles={operationalRoles}>
+            <ActiveServices />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/activities"
+        element={
+          <AdminPage allowedRoles={operationalRoles}>
+            <Activities />
+          </AdminPage>
+        }
+      />
+
+      <Route
+        path="/invoices"
+        element={
+          <AdminPage allowedRoles={superAdminOnly}>
+            <Invoices />
+          </AdminPage>
+        }
+      />
 
       <Route
         path="/client"
         element={
-          <ProtectedRoute allowedRole="client">
+          <ClientPage>
             <ClientLayout />
-          </ProtectedRoute>
+          </ClientPage>
         }
       >
         <Route index element={<ClientOverview />} />
         <Route path="request-service" element={<ClientRequestService />} />
         <Route path="services" element={<ClientServices />} />
         <Route path="invoices" element={<ClientInvoices />} />
-        <Route path="/client/deals" element={<ClientDeals />} />
+        <Route path="deals" element={<ClientDeals />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/login" replace />} />

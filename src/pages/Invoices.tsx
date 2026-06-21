@@ -49,6 +49,14 @@ type DealRecord = {
   priority?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
+
+  clientApprovalStatus?: string;
+clientApprovalRequired?: boolean;
+clientApprovedAt?: Timestamp;
+clientApprovedBy?: string;
+clientRejectedAt?: Timestamp;
+clientRejectedBy?: string;
+clientRejectionReason?: string;
 };
 
 type Invoice = {
@@ -382,11 +390,19 @@ export const Invoices: React.FC = () => {
     };
   }, [isArabic]);
 
-  const billableDeals = useMemo(() => {
-    return deals.filter(
-      (deal) => deal.dealStatus === "Won" && Number(deal.dealValue || 0) > 0,
-    );
-  }, [deals]);
+const billableDeals = useMemo(() => {
+  return deals.filter((deal) => {
+    const isAcceptedByClient =
+      deal.clientApprovalStatus === 'approved' ||
+      deal.clientApprovalStatus === 'accepted';
+
+    const isWon = deal.dealStatus === 'Won';
+
+    const hasValue = Number(deal.dealValue || 0) > 0;
+
+    return isAcceptedByClient && isWon && hasValue;
+  });
+}, [deals]);
 
   const selectedInvoice = useMemo(() => {
     if (!selectedInvoiceId) return null;
